@@ -28,7 +28,14 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk  # noqa: E402  # type: ignore
+from gi.repository import (
+    Gdk,  # noqa: E402  # type: ignore
+    GdkPixbuf,  # noqa: E402  # type: ignore
+    Gio,  # noqa: E402  # type: ignore
+    GLib,  # noqa: E402  # type: ignore
+    Gtk,  # noqa: E402  # type: ignore
+    Pango,  # noqa: E402  # type: ignore
+)
 
 APP_ID = "com.example.updatifyyy"
 APP_TITLE = "Updatify"
@@ -293,6 +300,8 @@ class MainWindow(Gtk.ApplicationWindow):
         self.log_view.set_editable(False)
         self.log_view.set_cursor_visible(False)
         self.log_view.set_monospace(True)
+        self.log_view.set_can_focus(True)
+        self.log_view.connect("key-press-event", self._on_log_key_press)
         self._init_log_css()
         self.log_buf = self.log_view.get_buffer()
 
@@ -300,6 +309,26 @@ class MainWindow(Gtk.ApplicationWindow):
         log_sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         log_sw.add(self.log_view)
         log_box.pack_start(log_sw, True, True, 0)
+
+        # Input controls for embedded log console
+        controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.log_input_entry = Gtk.Entry()
+        self.log_input_entry.set_placeholder_text(
+            "Type input for installer (Enter to send)"
+        )
+        self.log_input_entry.connect("activate", self._on_log_send)
+        controls.pack_start(self.log_input_entry, True, True, 0)
+
+        for label, payload in [("Y", "y\n"), ("N", "n\n"), ("Enter", "\n")]:
+            btn = Gtk.Button(label=label)
+            btn.connect("clicked", lambda _b, t=payload: self._send_to_proc(t))
+            controls.pack_start(btn, False, False, 0)
+
+        ctrlc_btn = Gtk.Button(label="Ctrl+C")
+        ctrlc_btn.connect("clicked", self._on_log_ctrl_c)
+        controls.pack_start(ctrlc_btn, False, False, 0)
+
+        log_box.pack_start(controls, False, False, 0)
 
         self.log_revealer.add(log_frame)
         outer.pack_start(self.log_revealer, True, True, 0)
@@ -327,10 +356,216 @@ class MainWindow(Gtk.ApplicationWindow):
         ] = []  # (timestamp, event, details)
 
         self._busy(False, "")
+        self._current_proc = None
+        # Initialize sudo keepalive control objects
+        self._sudo_keepalive_stop = None
+        self._sudo_keepalive_thread = None
 
         # First refresh and periodic checks
         self.refresh_status()
         GLib.timeout_add_seconds(AUTO_REFRESH_SECONDS, self._auto_refresh)
+
+    # Wrapper methods to call module-level helpers for log panel
+    def _init_log_css(self) -> None:
+        _init_log_css(self)
+
+    def _append_log(self, text: str) -> None:
+        _append_log(self, text)
+
+    def _clear_log_view(self) -> None:
+        _clear_log_view(self)
+
+    def _show_message(self, msg_type: Gtk.MessageType, message: str) -> None:
+        self.infobar.set_message_type(msg_type)
+        self.info_label.set_text(message)
+        self.infobar.show_all()
+
+    def _add_log(self, event: str, summary: str, details: str) -> None:
+        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        self._update_logs.append(
+            (ts, event, summary + ("\n" + details if details else ""))
+        )
+
+    # Sudo / pkexec pre-auth and keepalive
+    def _start_sudo_keepalive(self) -> None:
+        if self._sudo_keepalive_thread and self._sudo_keepalive_thread.is_alive():
+            return
+        import subprocess
+        import threading
+
+        self._sudo_keepalive_stop = threading.Event()
+
+        def loop():
+            # Refresh every 4 minutes until stop requested
+            stop_evt = self._sudo_keepalive_stop
+            if not stop_evt:
+                return
+            while not stop_evt.wait(240):
+                try:
+                    subprocess.run(
+                        ["sudo", "-n", "-v"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                except Exception:
+                    # Ignore errors (no cached auth)
+                    pass
+
+        self._sudo_keepalive_thread = threading.Thread(target=loop, daemon=True)
+        self._sudo_keepalive_thread.start()
+
+    def _ensure_sudo_pre_auth(self) -> None:
+        """
+        Attempt a one-time privilege elevation (pkexec preferred, fallback to sudo -v),
+        then start a keepalive thread so repeated sudo commands do not reprompt.
+        """
+        import shutil
+        import subprocess
+
+        try:
+            if shutil.which("pkexec"):
+                # pkexec GUI prompt once
+                subprocess.run(["pkexec", "/bin/true"])
+            else:
+                subprocess.run(["sudo", "-v"])
+            self._start_sudo_keepalive()
+        except Exception:
+            pass
+
+    def _patch_setup_for_polkit(self, repo_path: str) -> None:
+        """
+        Inline-patch the repository's ./setup script to wrap privileged commands
+        with polkitexec (uses pkexec if available, otherwise runs command directly),
+        replacing plain 'sudo ' and 'yay ' occurrences.
+        """
+        try:
+            setup_path = os.path.join(repo_path, "setup")
+            if not (os.path.isfile(setup_path) and os.access(setup_path, os.R_OK)):
+                return
+            with open(setup_path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+            header = '# UPDATIFYYY_POLKIT_PATCHED\npolkitexec() { command -v pkexec >/dev/null 2>&1 && pkexec "$@" || "$@"; }\n'
+            if "UPDATIFYYY_POLKIT_PATCHED" not in content:
+                content = header + content
+            # Replace 'sudo ' with 'polkitexec '
+            content = re.sub(r"(?m)(?<![\w-])sudo\s+", "polkitexec ", content)
+            # Replace 'yay ' with 'polkitexec yay '
+            content = re.sub(r"(?m)(?<![\w-])yay\s+", "polkitexec yay ", content)
+            with open(setup_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            os.chmod(setup_path, os.stat(setup_path).st_mode | 0o111)
+        except Exception:
+            # Best-effort patching; ignore failures
+            pass
+
+    # Embedded log console helpers
+    def _send_to_proc(self, text: str) -> None:
+        p = getattr(self, "_current_proc", None)
+        if p and getattr(p, "stdin", None):
+            try:
+                p.stdin.write(text)
+                p.stdin.flush()
+                self._append_log(f"[sent] {text}")
+            except Exception as ex:
+                self._append_log(f"[send error] {ex}\n")
+
+    def _on_log_send(self, _entry: Gtk.Entry) -> None:
+        txt = self.log_input_entry.get_text()
+        if txt and not txt.endswith("\n"):
+            txt += "\n"
+        if txt:
+            self._send_to_proc(txt)
+        self.log_input_entry.set_text("")
+
+    def _on_log_ctrl_c(self, _btn: Gtk.Button) -> None:
+        p = getattr(self, "_current_proc", None)
+        if p:
+            try:
+                import signal
+
+                p.send_signal(signal.SIGINT)
+                self._append_log("[signal] SIGINT sent\n")
+            except Exception as ex:
+                self._append_log(f"[ctrl-c error] {ex}\n")
+
+    def _on_log_key_press(self, _widget, event) -> bool:
+        # Map Y/N/Enter when log view has focus
+        if event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+            self._send_to_proc("\n")
+            return True
+        if event.keyval in (Gdk.KEY_y, Gdk.KEY_Y):
+            self._send_to_proc("y\n")
+            return True
+        if event.keyval in (Gdk.KEY_n, Gdk.KEY_N):
+            self._send_to_proc("n\n")
+            return True
+        return False
+
+    def _run_update_without_pull(self) -> None:
+        """
+        Test mode: run installer (./setup install) WITHOUT performing a git pull.
+        Triggered via Ctrl+I. Useful for verifying installer behavior.
+        """
+        repo_path = self._status.repo_path if self._status else REPO_PATH
+        setup_path = os.path.join(repo_path, "setup")
+        self.log_revealer.set_reveal_child(True)
+        self._append_log("\n=== TEST UPDATE (no git pull) ===\n")
+        self._busy(True, "Running test update...")
+
+        def work():
+            success = False
+            if os.path.isfile(setup_path) and os.access(setup_path, os.X_OK):
+                self._append_log("Launching installer (test mode)...\n")
+                # Pre-auth for sudo / pkexec so installer won't prompt repeatedly
+                self._ensure_sudo_pre_auth()
+                self._patch_setup_for_polkit(repo_path)
+                try:
+                    p = _spawn_setup_install(
+                        repo_path,
+                        lambda msg: self._append_log(msg),
+                        extra_args=["install"],
+                        auto_input_seq=["\n", "\n", "\n", "n\n", "\n"],
+                    )
+                    self._current_proc = p
+                    if p and p.stdout:
+                        for line in iter(p.stdout.readline, ""):
+                            if not line:
+                                break
+                            self._append_log(line)
+                        rc = p.wait()
+                        self._append_log(f"[exit {rc}]\n")
+                        success = rc == 0
+                        self._current_proc = None
+                    else:
+                        success = False
+                except Exception as ex:
+                    self._append_log(f"[error] {ex}\n")
+            else:
+                self._append_log("No executable './setup' found. Nothing to run.\n")
+
+            def done():
+                self._busy(False, "")
+                status_msg = (
+                    "Test update completed"
+                    if success
+                    else "Test update finished with errors"
+                )
+                self._add_log("Test Update", status_msg, "")
+                # Do NOT call _post_update_prompt in test mode.
+
+            GLib.idle_add(done)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_key_press(self, _widget, event) -> bool:
+        # Ctrl+I triggers test update (no git pull)
+        if event.state & Gdk.ModifierType.CONTROL_MASK and event.keyval in (
+            Gdk.KEY_i,
+            Gdk.KEY_I,
+        ):
+            self._run_update_without_pull()
+            return True
+        return False
 
     def _auto_refresh(self) -> bool:
         # Periodic refresh; return True to keep the timer
@@ -646,25 +881,37 @@ class MainWindow(Gtk.ApplicationWindow):
                 and os.access(setup_path, os.X_OK)
             ):
                 self._append_log("Launching installer...\n")
+                # Pre-auth for sudo / pkexec so installer won't prompt repeatedly
+                self._ensure_sudo_pre_auth()
+                self._patch_setup_for_polkit(repo_path)
                 # Reuse the streaming helper to show live logs in the embedded panel
                 try:
-                    p = subprocess.Popen(
-                        ["./setup", "install"],
-                        cwd=repo_path,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        text=True,
-                        encoding="utf-8",
-                        errors="replace",
-                        bufsize=1,
+                    p = _spawn_setup_install(
+                        repo_path,
+                        lambda msg: self._append_log(msg),
+                        extra_args=["install"],
                     )
-                    assert p.stdout is not None
-                    for line in iter(p.stdout.readline, ""):
-                        if not line:
-                            break
-                        self._append_log(line)
-                    rc = p.wait()
-                    self._append_log(f"[exit {rc}]\n")
+                    self._current_proc = p
+                    if p and p.stdout:
+                        for line in iter(p.stdout.readline, ""):
+                            if not line:
+                                break
+                            self._append_log(line)
+                        rc = p.wait()
+                        self._append_log(f"[exit {rc}]\n")
+                        self._current_proc = None
+                    # Guard against None return from _spawn_setup_install
+                    if p and p.stdout:
+                        for line in iter(p.stdout.readline, ""):
+                            if not line:
+                                break
+                            self._append_log(line)
+                        rc = p.wait()
+                        self._append_log(f"[exit {rc}]\n")
+                        success = rc == 0
+                    else:
+                        self._append_log("[error] setup script failed to start\n")
+                        success = False
                 except Exception as ex:
                     self._append_log(f"[error] {ex}\n")
 
@@ -857,23 +1104,36 @@ class SetupConsole(Gtk.Window):
         self._finished_callback = on_finished
         self._append(f"$ {' '.join(shlex.quote(a) for a in argv)}\n")
         try:
-            self._proc = subprocess.Popen(
-                argv,
-                cwd=cwd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                bufsize=1,
-            )
+            # If argv starts with ./setup attempt robust spawn with fallbacks
+            if argv and argv[0] == "./setup":
+                self._proc = _spawn_setup_install(
+                    cwd or REPO_PATH,
+                    lambda msg: self._append(msg),
+                    extra_args=argv[1:],
+                    capture_stdout=True,
+                )
+            else:
+                self._proc = subprocess.Popen(
+                    argv,
+                    cwd=cwd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    bufsize=1,
+                )
         except Exception as ex:
             self._append(f"[spawn error] {ex}\n")
             if self._finished_callback:
                 self._finished_callback()
             return
 
-        assert self._proc.stdout is not None
+        if not self._proc or not self._proc.stdout:
+            self._append("[spawn error] setup failed to start\n")
+            if self._finished_callback:
+                self._finished_callback()
+            return
         threading.Thread(target=self._stream_loop, daemon=True).start()
 
     def _stream_loop(self):
@@ -1129,10 +1389,30 @@ class SetupConsole(Gtk.Window):
 def _init_log_css(self):
     css = """
     .log-view {
-        font-family: "JetBrainsMono Nerd Font", "FiraCode Nerd Font", "Hack Nerd Font", "Cascadia Code PL", "MesloLGS NF", "Noto Sans Symbols2", "Noto Emoji", "DejaVu Sans Mono", monospace;
+        font-family: "JetBrainsMono NF", "JetBrainsMono Nerd Font", "JetBrainsMonoNL-Regular", "JetBrainsMonoNF-Regular", "FiraCode Nerd Font", "FiraCode Nerd Font Mono", "Hack Nerd Font", "Cascadia Code PL", "MesloLGS NF", "Noto Sans Symbols2", "Noto Emoji", "Noto Sans Mono", "Symbols Nerd Font", "Nerd Font", "DejaVu Sans Mono", monospace;
         font-size: 12px;
         line-height: 1.25;
+        white-space: pre-wrap;
     }
+    .ansi-bold     { font-weight: bold; }
+    .ansi-dim      { opacity: 0.7; }
+    .ansi-italic   { font-style: italic; }
+    .ansi-underline{ text-decoration: underline; }
+    .ansi-red      { color: #ff5555; }
+    .ansi-green    { color: #50fa7b; }
+    .ansi-yellow   { color: #f1fa8c; }
+    .ansi-blue     { color: #8be9fd; }
+    .ansi-magenta  { color: #ff79c6; }
+    .ansi-cyan     { color: #66d9ef; }
+    .ansi-white    { color: #f8f8f2; }
+    .ansi-bright-black { color: #6272a4; }
+    .ansi-bright-red { color: #ff6e6e; }
+    .ansi-bright-green { color: #69ff94; }
+    .ansi-bright-yellow { color: #ffffa5; }
+    .ansi-bright-blue { color: #9aedfe; }
+    .ansi-bright-magenta { color: #ff92df; }
+    .ansi-bright-cyan { color: #82e9ff; }
+    .ansi-bright-white { color: #ffffff; }
     """
     try:
         provider = Gtk.CssProvider()
@@ -1149,19 +1429,385 @@ def _init_log_css(self):
 
 
 def _append_log(self, text: str):
-    if not hasattr(self, "log_buf"):
-        return
-    buf = self.log_buf
-    end_iter = buf.get_end_iter()
-    buf.insert(end_iter, text)
-    # Auto scroll
-    mark = buf.create_mark(None, buf.get_end_iter(), False)
-    self.log_view.scroll_to_mark(mark, 0.0, True, 0.0, 1.0)
+    """
+    Thread-safe append to the embedded log view with ANSI color/style formatting.
+    If called from a background thread, schedule the UI mutation via GLib.idle_add.
+    """
+
+    def do_append():
+        if not hasattr(self, "log_buf"):
+            return False
+        try:
+            buf = self.log_buf
+            _insert_ansi_formatted(buf, text)
+            # Auto scroll safely after insert
+            mark = buf.create_mark(None, buf.get_end_iter(), False)
+            if hasattr(self, "log_view"):
+                self.log_view.scroll_to_mark(mark, 0.0, True, 0.0, 1.0)
+        except Exception:
+            pass
+        return False  # ensure idle handler runs only once
+
+    try:
+        import threading
+
+        if threading.current_thread() is threading.main_thread():
+            do_append()
+        else:
+            GLib.idle_add(do_append)
+    except Exception:
+        # Fallback: ignore
+        pass
 
 
 def _clear_log_view(self):
-    if hasattr(self, "log_buf"):
-        self.log_buf.set_text("")
+    """
+    Thread-safe clear of the log buffer (retains ANSI tags definitions).
+    """
+
+    def do_clear():
+        if hasattr(self, "log_buf"):
+            try:
+                self.log_buf.set_text("")
+            except Exception:
+                pass
+        return False
+
+    try:
+        import threading
+
+        if threading.current_thread() is threading.main_thread():
+            do_clear()
+        else:
+            GLib.idle_add(do_clear)
+    except Exception:
+        pass
+
+
+def _spawn_setup_install(
+    repo_path: str,
+    logger,
+    extra_args: list[str] | None = None,
+    capture_stdout: bool = True,
+    auto_input_seq: list[str] | None = None,
+):
+    """
+    Try to execute the setup installer with fallbacks:
+    1. Direct exec: ./setup (requires executable bit and valid shebang if script)
+    2. bash ./setup ...
+    3. sh ./setup ...
+    Returns a Popen object or None.
+    logger: callable accepting a string to append to log/output.
+    extra_args: additional arguments after 'setup'.
+    capture_stdout: if True, pipes stdout/stderr; else inherits parent streams.
+    auto_input_seq: list of strings to send to stdin automatically (e.g. ["\\n","n\\n"])
+    """
+    extra_args = extra_args or []
+    base_cmds = [
+        ["./setup"] + extra_args,
+        ["bash", "./setup"] + extra_args,
+        ["sh", "./setup"] + extra_args,
+    ]
+
+    for cmd in base_cmds:
+        try:
+            if capture_stdout:
+                env = dict(os.environ)
+                env.update(
+                    {
+                        "FORCE_COLOR": "1",
+                        "CLICOLOR": "1",
+                        "CLICOLOR_FORCE": "1",
+                        "TERM": "xterm-256color",
+                    }
+                )
+                env.pop("NO_COLOR", None)
+                p = subprocess.Popen(
+                    cmd,
+                    cwd=repo_path,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.PIPE,
+                    universal_newlines=True,
+                    bufsize=1,
+                    env=env,
+                )
+            else:
+                env = dict(os.environ)
+                env.update(
+                    {
+                        "FORCE_COLOR": "1",
+                        "CLICOLOR": "1",
+                        "CLICOLOR_FORCE": "1",
+                        "TERM": "xterm-256color",
+                    }
+                )
+                env.pop("NO_COLOR", None)
+                p = subprocess.Popen(
+                    cmd,
+                    cwd=repo_path,
+                    stdin=subprocess.PIPE,
+                    universal_newlines=True,
+                    env=env,
+                )
+            logger(f"[spawn] {' '.join(cmd)}\n")
+            # Auto input sequence
+            if p.stdin and auto_input_seq:
+
+                def _feed():
+                    import time as _t
+
+                    stdin = p.stdin
+                    if not stdin:
+                        logger(
+                            "[auto-input] stdin unavailable; aborting auto sequence\n"
+                        )
+                        return
+                    for item in auto_input_seq:
+                        try:
+                            if stdin.closed:
+                                logger("[auto-input] stdin closed; stopping\n")
+                                break
+                            stdin.write(item)
+                            stdin.flush()
+                            logger(f"[auto-input] {repr(item)}\n")
+                        except Exception as _ex:
+                            logger(f"[auto-input-error] {_ex}\n")
+                            break
+                        _t.sleep(0.3)
+
+                threading.Thread(target=_feed, daemon=True).start()
+            return p
+        except OSError as ex:
+            if ex.errno == 8:  # Exec format error
+                logger(
+                    f"[warn] Exec format error with {' '.join(cmd)}; trying fallback...\n"
+                )
+                continue
+            logger(f"[error] {ex}\n")
+            return None
+        except Exception as ex:
+            logger(f"[error] {ex}\n")
+            return None
+    logger("[error] All setup execution fallbacks failed.\n")
+    return None
+
+
+def _insert_ansi_formatted(buf: Gtk.TextBuffer, raw: str) -> None:
+    """
+    Parse ANSI escape sequences in raw text and apply tags.
+    Supports basic SGR color + style codes.
+    """
+    import re
+
+    # Create tags once
+    tv = buf
+    tag_defs = {
+        "ansi-bold": {},
+        "ansi-dim": {},
+        "ansi-italic": {},
+        "ansi-underline": {},
+        "ansi-red": {},
+        "ansi-green": {},
+        "ansi-yellow": {},
+        "ansi-blue": {},
+        "ansi-magenta": {},
+        "ansi-cyan": {},
+        "ansi-white": {},
+        "ansi-bright-black": {},
+        "ansi-bright-red": {},
+        "ansi-bright-green": {},
+        "ansi-bright-yellow": {},
+        "ansi-bright-blue": {},
+        "ansi-bright-magenta": {},
+        "ansi-bright-cyan": {},
+        "ansi-bright-white": {},
+    }
+    for name, props in tag_defs.items():
+        if tv.get_tag_table().lookup(name) is None:
+            tag = Gtk.TextTag.new(name)
+            if name == "ansi-bold":
+                tag.set_property("weight", Pango.Weight.BOLD)
+            elif name == "ansi-dim":
+                tag.set_property("scale", 0.95)
+            elif name == "ansi-italic":
+                tag.set_property("style", Pango.Style.ITALIC)
+            elif name == "ansi-underline":
+                tag.set_property("underline", Pango.Underline.SINGLE)
+            elif name == "ansi-red":
+                tag.set_property("foreground", "#ff5555")
+            elif name == "ansi-green":
+                tag.set_property("foreground", "#50fa7b")
+            elif name == "ansi-yellow":
+                tag.set_property("foreground", "#f1fa8c")
+            elif name == "ansi-blue":
+                tag.set_property("foreground", "#8be9fd")
+            elif name == "ansi-magenta":
+                tag.set_property("foreground", "#ff79c6")
+            elif name == "ansi-cyan":
+                tag.set_property("foreground", "#66d9ef")
+            elif name == "ansi-white":
+                tag.set_property("foreground", "#f8f8f2")
+            elif name == "ansi-bright-black":
+                tag.set_property("foreground", "#6272a4")
+            elif name == "ansi-bright-red":
+                tag.set_property("foreground", "#ff6e6e")
+            elif name == "ansi-bright-green":
+                tag.set_property("foreground", "#69ff94")
+            elif name == "ansi-bright-yellow":
+                tag.set_property("foreground", "#ffffa5")
+            elif name == "ansi-bright-blue":
+                tag.set_property("foreground", "#9aedfe")
+            elif name == "ansi-bright-magenta":
+                tag.set_property("foreground", "#ff92df")
+            elif name == "ansi-bright-cyan":
+                tag.set_property("foreground", "#82e9ff")
+            elif name == "ansi-bright-white":
+                tag.set_property("foreground", "#ffffff")
+            tv.get_tag_table().add(tag)
+    # Match full ANSI SGR sequences including 38;5;<n>, 48;5;<n>, and reset
+    ansi_re = re.compile(r"\x1b\[[0-9;]*m")
+    # Mapping SGR codes to tag classes
+    sgr_map = {
+        # Styles
+        "1": "ansi-bold",
+        "2": "ansi-dim",
+        "3": "ansi-italic",
+        "4": "ansi-underline",
+        # 30-37 normal fg
+        "30": "ansi-bright-black",
+        "31": "ansi-red",
+        "32": "ansi-green",
+        "33": "ansi-yellow",
+        "34": "ansi-blue",
+        "35": "ansi-magenta",
+        "36": "ansi-cyan",
+        "37": "ansi-white",
+        # 90-97 bright fg
+        "90": "ansi-bright-black",
+        "91": "ansi-bright-red",
+        "92": "ansi-bright-green",
+        "93": "ansi-bright-yellow",
+        "94": "ansi-bright-blue",
+        "95": "ansi-bright-magenta",
+        "96": "ansi-bright-cyan",
+        "97": "ansi-bright-white",
+    }
+    # Background color mapping (simple and bright)
+    bg_map = {
+        "40": "#000000",
+        "41": "#ff5555",
+        "42": "#50fa7b",
+        "43": "#f1fa8c",
+        "44": "#8be9fd",
+        "45": "#ff79c6",
+        "46": "#66d9ef",
+        "47": "#f8f8f2",
+        "100": "#6272a4",
+        "101": "#ff6e6e",
+        "102": "#69ff94",
+        "103": "#ffffa5",
+        "104": "#9aedfe",
+        "105": "#ff92df",
+        "106": "#82e9ff",
+        "107": "#ffffff",
+    }
+    pos = 0
+    active_tags = []
+    for m in ansi_re.finditer(raw):
+        segment = raw[pos : m.start()]
+        if segment:
+            start_mark = buf.create_mark(None, buf.get_end_iter(), True)
+            buf.insert(buf.get_end_iter(), segment)
+            end_iter2 = buf.get_end_iter()
+            for t in active_tags:
+                tag_obj = buf.get_tag_table().lookup(t)
+                if tag_obj:
+                    buf.apply_tag(tag_obj, buf.get_iter_at_mark(start_mark), end_iter2)
+        seq = m.group()
+        codes = seq[2:-1].split(";") if seq != "\x1b[m" else []
+        if not codes or any(c == "0" for c in codes):
+            active_tags = []
+        else:
+            # Support 256-color foreground/background: 38;5;<n>, 48;5;<n>
+            i = 0
+            while i < len(codes):
+                c = codes[i]
+                if c in ("38", "48") and i + 2 < len(codes) and codes[i + 1] == "5":
+                    try:
+                        color_index = int(codes[i + 2])
+                        tag_name = f"ansi-xterm-{c}-{color_index}"
+                        if buf.get_tag_table().lookup(tag_name) is None:
+                            # Compute xterm 256-color palette RGB
+                            def _xterm_color(n: int) -> str:
+                                if n < 16:
+                                    # Basic colors approximated
+                                    base = [
+                                        "#000000",
+                                        "#800000",
+                                        "#008000",
+                                        "#808000",
+                                        "#000080",
+                                        "#800080",
+                                        "#008080",
+                                        "#c0c0c0",
+                                        "#808080",
+                                        "#ff0000",
+                                        "#00ff00",
+                                        "#ffff00",
+                                        "#0000ff",
+                                        "#ff00ff",
+                                        "#00ffff",
+                                        "#ffffff",
+                                    ]
+                                    return base[n]
+                                if 16 <= n <= 231:
+                                    n -= 16
+                                    r = (n // 36) % 6
+                                    g = (n // 6) % 6
+                                    b = n % 6
+                                    conv = [0, 95, 135, 175, 215, 255]
+                                    return f"#{conv[r]:02x}{conv[g]:02x}{conv[b]:02x}"
+                                # Grayscale 232–255
+                                level = 8 + (n - 232) * 10
+                                return f"#{level:02x}{level:02x}{level:02x}"
+
+                            fg_hex = _xterm_color(color_index)
+                            tag = Gtk.TextTag.new(tag_name)
+                            if c == "38":
+                                tag.set_property("foreground", fg_hex)
+                            else:
+                                tag.set_property("background", fg_hex)
+                            buf.get_tag_table().add(tag)
+                        active_tags.append(tag_name)
+                    except Exception:
+                        pass
+                    i += 3
+                    continue
+                tag = sgr_map.get(c)
+                if tag and tag not in active_tags:
+                    active_tags.append(tag)
+                elif c in bg_map:
+                    tag_name = f"ansi-bg-{c}"
+                    if buf.get_tag_table().lookup(tag_name) is None:
+                        tag_obj = Gtk.TextTag.new(tag_name)
+                        tag_obj.set_property("background", bg_map[c])
+                        buf.get_tag_table().add(tag_obj)
+                    active_tags.append(tag_name)
+                i += 1
+        pos = m.end()
+    # Remainder
+    remainder = raw[pos:]
+    if remainder:
+        start_mark = buf.create_mark(None, buf.get_end_iter(), True)
+        buf.insert(buf.get_end_iter(), remainder)
+        end_iter2 = buf.get_end_iter()
+        for t in active_tags:
+            tag_obj = buf.get_tag_table().lookup(t)
+            if tag_obj:
+                buf.apply_tag(tag_obj, buf.get_iter_at_mark(start_mark), end_iter2)
+    # Ensure trailing newline formatting
+    return
 
 
 def _fetch_github_avatar_url(email: str) -> str:
