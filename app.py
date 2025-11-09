@@ -56,6 +56,7 @@ def _load_settings() -> dict:
         "send_notifications": True,  # desktop notifications on finish
         "log_max_lines": 5000,  # trim logs to this many lines (0 to disable)
         "changes_lazy_load": True,  # lazy load commits with animations
+        "post_script_path": "",  # bash script to run after installer (pkexec)
     }
     try:
         if os.path.isfile(SETTINGS_FILE):
@@ -519,7 +520,7 @@ class MainWindow(Gtk.ApplicationWindow):
                 cwd=repo_path,
                 on_finished=lambda: (
                     self.refresh_status(),
-                    (not test_mode and self._post_update_prompt()),
+                    (not test_mode and self._run_post_script_if_configured()),
                 ),
             )
             return
@@ -1138,6 +1139,49 @@ polkit.addRule(function(action, subject) {{
         changes_row.pack_start(cb_lazy, False, False, 0)
         box.pack_start(changes_row, False, False, 0)
 
+        # Post-install script (pkexec)
+        post_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        lbl_post = Gtk.Label(label="Post-install script (pkexec):")
+        lbl_post.set_xalign(0.0)
+        post_row.pack_start(lbl_post, False, False, 0)
+        entry_post = Gtk.Entry()
+        entry_post.set_hexpand(True)
+        entry_post.set_placeholder_text("/path/to/script.sh")
+        entry_post.set_text(str(SETTINGS.get("post_script_path", "") or ""))
+        post_row.pack_start(entry_post, True, True, 0)
+        browse_post = Gtk.Button.new_from_icon_name(
+            "folder-open-symbolic", Gtk.IconSize.BUTTON
+        )
+        browse_post.set_tooltip_text("Browse for post-install script")
+
+        def on_browse_post(_btn):
+            chooser = Gtk.FileChooserDialog(
+                title="Select script",
+                transient_for=self,
+                action=Gtk.FileChooserAction.OPEN,
+            )
+            chooser.add_buttons(
+                "Cancel", Gtk.ResponseType.CANCEL, "Select", Gtk.ResponseType.OK
+            )
+            try:
+                start_dir = os.path.dirname(
+                    entry_post.get_text().strip() or os.path.expanduser("~")
+                )
+                if os.path.isdir(start_dir):
+                    chooser.set_current_folder(start_dir)
+            except Exception:
+                pass
+            resp2 = chooser.run()
+            if resp2 == Gtk.ResponseType.OK:
+                filename = chooser.get_filename()
+                if filename:
+                    entry_post.set_text(filename)
+            chooser.destroy()
+
+        browse_post.connect("clicked", on_browse_post)
+        post_row.pack_start(browse_post, False, False, 0)
+        box.pack_start(post_row, False, False, 0)
+
         dialog.show_all()
         resp = dialog.run()
         if resp == Gtk.ResponseType.OK:
@@ -1172,6 +1216,7 @@ polkit.addRule(function(action, subject) {{
             except Exception:
                 pass
             SETTINGS["changes_lazy_load"] = cb_lazy.get_active()
+            SETTINGS["post_script_path"] = entry_post.get_text().strip()
             _save_settings(SETTINGS)
 
             REPO_PATH = str(
@@ -1328,54 +1373,52 @@ polkit.addRule(function(action, subject) {{
         if getattr(self, "log_revealer", None):
             self.log_revealer.set_reveal_child(False)
         self.refresh_status()
-        # After update (and installer launch) prompt for tweaks if success
+        # After installer completes, run configured post-install script (if any)
         if success:
-            self._post_update_prompt()
+            self._run_post_script_if_configured()
 
-    def _post_update_prompt(self) -> None:
-        # Ask user whether to apply after-update tweaks
-        dialog = Gtk.MessageDialog(
-            transient_for=self,
-            flags=0,
-            message_type=Gtk.MessageType.QUESTION,
-            buttons=Gtk.ButtonsType.NONE,
-            text="Apply after-update tweaks?",
-        )
-        dialog.format_secondary_text(
-            "Would you like to apply post-update tweaks now?\n"
-            "Tweaks will remove hyprland portal override file."
-        )
-        dialog.add_button("No", Gtk.ResponseType.NO)
-        dialog.add_button("Yes", Gtk.ResponseType.YES)
-        resp = dialog.run()
-        dialog.destroy()
+    def _run_post_script_if_configured(self) -> None:
+        """
+        If a post-install script path is configured, run it via pkexec without prompting.
+        Streams output to the embedded console when available.
+        """
+        path = str(SETTINGS.get("post_script_path") or "").strip()
+        if not path:
+            return
 
-        applied = False
-        if resp == Gtk.ResponseType.YES:
-            target = os.path.expanduser(
-                "~/.config/xdg-desktop-portal/hyprland-portals.conf"
-            )
+        # Reveal console for visibility
+        if hasattr(self, "log_revealer"):
             try:
-                if os.path.isfile(target):
-                    os.remove(target)
-                    applied = True
+                self.log_revealer.set_reveal_child(True)
             except Exception:
-                # Ignore failures silently; still notify
                 pass
 
-        app = self.get_application()
-        if isinstance(app, Gio.Application):
-            notification = Gio.Notification.new("Updatify Update")
-            if applied:
-                notification.set_body(
-                    "Tweaks applied (portal config removed). Update successful."
+        self._append_log("\n=== POST-INSTALL SCRIPT (pkexec) ===\n")
+
+        def work():
+            try:
+                cmd_str = f"exec {shlex.quote(path)}"
+                self._append_log(f"$ pkexec bash -lc {shlex.quote(cmd_str)}\n")
+                p = subprocess.Popen(
+                    ["pkexec", "bash", "-lc", cmd_str],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    bufsize=1,
                 )
-            else:
-                notification.set_body("Update successful.")
-            try:
-                app.send_notification("updatifyyy-update", notification)
-            except Exception:
-                pass
+                assert p.stdout is not None
+                for line in iter(p.stdout.readline, ""):
+                    if not line:
+                        break
+                    self._append_log(str(line))
+                rc = p.wait()
+                self._append_log(f"[post-script exit {rc}]\n")
+            except Exception as ex:
+                self._append_log(f"[post-script error] {ex}\n")
+
+        threading.Thread(target=work, daemon=True).start()
 
     # Removed key press handler (console/shortcut no longer used)
 
@@ -1392,7 +1435,9 @@ polkit.addRule(function(action, subject) {{
         console = SetupConsole(self, title="Installer (setup install)")
         console.present()
         console.run_process(
-            ["./setup", "install"], cwd=REPO_PATH, on_finished=self._post_update_prompt
+            ["./setup", "install"],
+            cwd=REPO_PATH,
+            on_finished=self._run_post_script_if_configured,
         )
 
     # Removed auto-respond logic (no embedded console interaction).
