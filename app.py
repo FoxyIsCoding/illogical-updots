@@ -251,9 +251,9 @@ class MainWindow(Gtk.ApplicationWindow):
             Gtk.Image.new_from_icon_name("open-menu-symbolic", Gtk.IconSize.BUTTON)
         )
 
-        hb.pack_end(self.update_btn)
-        hb.pack_end(self.view_btn)
         hb.pack_end(menu_btn)
+        hb.pack_end(self.view_btn)
+        hb.pack_end(self.update_btn)
         # Add Nerd Fonts install accessible also via menu item
 
         # Main content
@@ -264,17 +264,25 @@ class MainWindow(Gtk.ApplicationWindow):
         content.set_border_width(16)
         outer.pack_start(content, True, True, 0)
 
-        # Primary status label
+        # Fullscreen primary banner (only main visible content)
         self.primary_label = Gtk.Label()
-        self.primary_label.set_xalign(0.0)
+        self.primary_label.set_xalign(0.5)
+        self.primary_label.set_yalign(0.5)
         self.primary_label.set_use_markup(True)
-        content.pack_start(self.primary_label, False, False, 0)
+        self.primary_label.get_style_context().add_class("status-banner")
+        self.primary_label.set_line_wrap(True)
+        self.primary_label.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        self.primary_label.set_markup(
+            "<span size='xx-large' weight='bold'>Checking repository status…</span>"
+        )
+        banner_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        banner_box.set_hexpand(True)
+        banner_box.set_vexpand(True)
+        banner_box.pack_start(self.primary_label, True, True, 0)
+        content.pack_start(banner_box, True, True, 0)
 
-        # Secondary details / stats
-        self.details_label = Gtk.Label()
-        self.details_label.set_xalign(0.0)
-        self.details_label.set_selectable(True)
-        content.pack_start(self.details_label, False, False, 0)
+        # Remove secondary details label (minimal fullscreen banner)
+        self.details_label = None
 
         # Spinner (for background work)
         spin_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -289,7 +297,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
         content.pack_start(spin_box, False, False, 0)
 
-        # Embedded log panel (hidden by default)
+        # Expandable autohiding embedded log console (revealer)
         self.log_revealer = Gtk.Revealer()
         self.log_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
         self.log_revealer.set_reveal_child(False)
@@ -300,24 +308,35 @@ class MainWindow(Gtk.ApplicationWindow):
         log_box.set_border_width(6)
         log_frame.add(log_box)
 
+        # Header with title and clear/hide controls
         log_header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        log_title = Gtk.Label(label="Update / Install Log")
+        log_title = Gtk.Label(label="Console")
         log_title.set_xalign(0.0)
         log_header.pack_start(log_title, True, True, 0)
+
         self.log_clear_btn = Gtk.Button.new_from_icon_name(
             "edit-clear-symbolic", Gtk.IconSize.SMALL_TOOLBAR
         )
-        self.log_clear_btn.set_tooltip_text("Clear log")
+        self.log_clear_btn.set_tooltip_text("Clear console")
         self.log_clear_btn.connect("clicked", lambda _b: self._clear_log_view())
         log_header.pack_end(self.log_clear_btn, False, False, 0)
+
+        self.log_hide_btn = Gtk.Button.new_from_icon_name(
+            "go-up-symbolic", Gtk.IconSize.SMALL_TOOLBAR
+        )
+        self.log_hide_btn.set_tooltip_text("Hide console")
+        self.log_hide_btn.connect(
+            "clicked", lambda _b: self.log_revealer.set_reveal_child(False)
+        )
+        log_header.pack_end(self.log_hide_btn, False, False, 0)
+
         log_box.pack_start(log_header, False, False, 0)
 
+        # TextView inside scrolled window
         self.log_view = Gtk.TextView()
         self.log_view.set_editable(False)
         self.log_view.set_cursor_visible(False)
         self.log_view.set_monospace(True)
-        self.log_view.set_can_focus(True)
-        self.log_view.connect("key-press-event", self._on_log_key_press)
         self._init_log_css()
         self.log_buf = self.log_view.get_buffer()
 
@@ -326,40 +345,29 @@ class MainWindow(Gtk.ApplicationWindow):
         log_sw.add(self.log_view)
         log_box.pack_start(log_sw, True, True, 0)
 
-        # Input controls for embedded log console
-        controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        self.log_input_entry = Gtk.Entry()
-        self.log_input_entry.set_placeholder_text(
-            "Type input for installer (Enter to send)"
-        )
-        self.log_input_entry.connect("activate", self._on_log_send)
-        controls.pack_start(self.log_input_entry, True, True, 0)
-
-        for label, payload in [("Y", "y\n"), ("N", "n\n"), ("Enter", "\n")]:
-            btn = Gtk.Button(label=label)
-            btn.connect("clicked", lambda _b, t=payload: self._send_to_proc(t))
-            controls.pack_start(btn, False, False, 0)
-
-        ctrlc_btn = Gtk.Button(label="Ctrl+C")
-        ctrlc_btn.connect("clicked", self._on_log_ctrl_c)
-        controls.pack_start(ctrlc_btn, False, False, 0)
-
-        log_box.pack_start(controls, False, False, 0)
-
         self.log_revealer.add(log_frame)
-        outer.pack_start(self.log_revealer, True, True, 0)
+        outer.pack_start(self.log_revealer, False, False, 0)
 
-        # Footer InfoBar for messages
-        self.infobar = Gtk.InfoBar()
-        self.infobar.set_show_close_button(True)
-        self.infobar.connect("response", lambda bar, resp: bar.hide())
-        self.info_label = Gtk.Label(xalign=0.0)
-        self.info_label.set_line_wrap(True)
-        self.info_label.set_max_width_chars(60)
-        content_area = self.infobar.get_content_area()
-        content_area.add(self.info_label)
-        self.infobar.hide()
-        outer.pack_end(self.infobar, False, False, 0)
+        # Error panel (kept)
+        self.error_revealer = Gtk.Revealer()
+        self.error_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
+        self.error_revealer.set_reveal_child(False)
+
+        error_frame = Gtk.Frame()
+        error_frame.set_shadow_type(Gtk.ShadowType.IN)
+        error_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        error_box.set_border_width(8)
+        self.error_icon = Gtk.Image.new_from_icon_name(
+            "dialog-error-symbolic", Gtk.IconSize.MENU
+        )
+        self.error_label = Gtk.Label(xalign=0.0)
+        self.error_label.set_line_wrap(True)
+        self.error_label.set_max_width_chars(80)
+        error_box.pack_start(self.error_icon, False, False, 0)
+        error_box.pack_start(self.error_label, True, True, 0)
+        error_frame.add(error_box)
+        self.error_revealer.add(error_frame)
+        outer.pack_end(self.error_revealer, False, False, 0)
 
         self.show_all()
         self.connect("key-press-event", self._on_key_press)
@@ -392,9 +400,18 @@ class MainWindow(Gtk.ApplicationWindow):
         _clear_log_view(self)
 
     def _show_message(self, msg_type: Gtk.MessageType, message: str) -> None:
-        self.infobar.set_message_type(msg_type)
-        self.info_label.set_text(message)
-        self.infobar.show_all()
+        # Route messages to the top error panel instead of a bottom infobar
+        icon = (
+            "dialog-error-symbolic"
+            if msg_type in (Gtk.MessageType.ERROR, Gtk.MessageType.WARNING)
+            else "dialog-information-symbolic"
+        )
+        try:
+            self.error_icon.set_from_icon_name(icon, Gtk.IconSize.MENU)
+        except Exception:
+            pass
+        self.error_label.set_text(message or "")
+        self.error_revealer.set_reveal_child(bool(message))
 
     def _add_log(self, event: str, summary: str, details: str) -> None:
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -430,12 +447,15 @@ class MainWindow(Gtk.ApplicationWindow):
                 self._append_log(f"[send error] {ex}\n")
 
     def _on_log_send(self, _entry: Gtk.Entry) -> None:
-        txt = self.log_input_entry.get_text()
+        entry = getattr(self, "log_input_entry", None)
+        if not entry:
+            return
+        txt = entry.get_text()
         if txt and not txt.endswith("\n"):
             txt += "\n"
         if txt:
             self._send_to_proc(txt)
-        self.log_input_entry.set_text("")
+        entry.set_text("")
 
     def _on_log_ctrl_c(self, _btn: Gtk.Button) -> None:
         p = getattr(self, "_current_proc", None)
@@ -502,7 +522,9 @@ class MainWindow(Gtk.ApplicationWindow):
             return
 
         # Embedded path (colored PTY streaming)
-        self.log_revealer.set_reveal_child(True)
+        lr = getattr(self, "log_revealer", None)
+        if lr:
+            lr.set_reveal_child(True)
         self._append_log(
             "\n=== INSTALLER START ({}) ===\n".format("TEST" if test_mode else "NORMAL")
         )
@@ -646,7 +668,9 @@ class MainWindow(Gtk.ApplicationWindow):
         if not selected:
             self._show_message(Gtk.MessageType.INFO, "No fonts selected.")
             return
-        self.log_revealer.set_reveal_child(True)
+        lr = getattr(self, "log_revealer", None)
+        if lr:
+            lr.set_reveal_child(True)
         self._append_log("\n=== NERD FONTS INSTALL ===\n")
         self._busy(True, "Installing fonts...")
 
@@ -809,43 +833,63 @@ polkit.addRule(function(action, subject) {{
         else:
             self.spinner.stop()
         self.status_hint.set_text(hint or "")
+        # In minimal mode no log updates to disable
 
     def _apply_update_button_style(self) -> None:
-        # Blue and clickable when updates are available; grey/disabled otherwise
+        # Always keep Update button clickable; change label/tooltip/style based on status
         ctx = self.update_btn.get_style_context()
+        self.update_btn.set_sensitive(True)
         if self._status and self._status.has_updates:
-            self.update_btn.set_sensitive(True)
             if not ctx.has_class("suggested-action"):
                 ctx.add_class("suggested-action")  # typically blue in GTK themes
-            self.update_btn.set_tooltip_text("Pull latest updates")
+            self.update_btn.set_label("Update available")
+            self.update_btn.set_tooltip_text("Pull latest updates from upstream")
         else:
-            self.update_btn.set_sensitive(False)
             if ctx.has_class("suggested-action"):
                 ctx.remove_class("suggested-action")
-            self.update_btn.set_tooltip_text("No updates available")
+            self.update_btn.set_label("Up to date")
+            self.update_btn.set_tooltip_text(
+                "Re-run install (files-only) even if up to date"
+            )
 
     def _set_labels_for_status(self, st: RepoStatus) -> None:
         if not st.ok:
             self.primary_label.set_markup(
-                "<b>Repository status:</b> <span color='red'>Error</span>"
+                "<span size='xx-large' weight='bold' foreground='red'>Repository error</span>"
             )
-            self.details_label.set_text(st.error or "Unknown error")
+            if self.details_label:
+                self.details_label.set_text(st.error or "Unknown error")
             return
 
         if st.fetch_error:
-            # Non-fatal: show warning on fetch error but continue with whatever info we have
-            self._show_message(
-                Gtk.MessageType.WARNING,
-                f"Fetch warning: {st.fetch_error}",
-            )
+            # Non-fatal fetch warning: show in error panel without using _show_message
+            try:
+                self.error_icon.set_from_icon_name(
+                    "dialog-warning-symbolic", Gtk.IconSize.MENU
+                )
+            except Exception:
+                pass
+            self.error_label.set_text(f"Fetch warning: {st.fetch_error}")
+            self.error_revealer.set_reveal_child(True)
 
         # Primary line
+        # Reset banner state classes
+        ctx = self.primary_label.get_style_context()
+        ctx.remove_class("status-up")
+        ctx.remove_class("status-ok")
+        ctx.remove_class("status-err")
+
         if st.behind > 0:
+            ctx.add_class("status-up")
             self.primary_label.set_markup(
-                f"<b>Updates available</b> — {st.behind} new commit(s) to pull"
+                f"<span size='xx-large' weight='bold'>Updates available</span>\n"
+                f"<span size='large'>{st.behind} new commit(s) to pull</span>"
             )
         else:
-            self.primary_label.set_markup("<b>Up to date</b>")
+            ctx.add_class("status-ok")
+            self.primary_label.set_markup(
+                "<span size='xx-large' weight='bold'>Up to date</span>"
+            )
 
         # Secondary details
         branch = st.branch or "(unknown)"
@@ -865,7 +909,8 @@ polkit.addRule(function(action, subject) {{
             f"Status: {changes}",
             f"Sync: {ahead}, {behind}",
         ]
-        self.details_label.set_text("\n".join(details))
+        if self.details_label:
+            self.details_label.set_text("\n".join(details))
 
     def refresh_status(self) -> None:
         def refresh_work():
@@ -1097,13 +1142,16 @@ polkit.addRule(function(action, subject) {{
         dialog.destroy()
 
     def on_update_clicked(self, _btn: Gtk.Button) -> None:
-        if not (self._status and self._status.has_updates):
+        # Allow update even when up to date (will run installer plan accordingly)
+        if not self._status:
+            # If status isn't ready yet, force a refresh then bail
+            self.refresh_status()
             return
         repo_path = self._status.repo_path
 
-        # Open embedded log panel
-        self.log_revealer.set_reveal_child(True)
-        self._append_log("\n=== UPDATE START ===\n")
+        # Show embedded console and mark busy
+        if hasattr(self, "log_revealer"):
+            self.log_revealer.set_reveal_child(True)
         self._busy(True, "Updating...")
 
         def stream(cmd: list[str], cwd: str) -> int:
@@ -1173,17 +1221,53 @@ polkit.addRule(function(action, subject) {{
                     text=True,
                 )
 
-            # If installer exists, stream its output into the embedded log
+            # If installer exists, stream its output into the embedded log with PTY/colors
             setup_path = os.path.join(repo_path, "setup")
-            if (
-                success
-                and os.path.isfile(setup_path)
-                and os.access(setup_path, os.X_OK)
-            ):
-                # Delegate to unified installer (normal mode) and return
-                self._run_installer_common(test_mode=False, commands=plan_cmds)
-                # Installer delegated; legacy inline logic removed
-                return
+            if os.path.isfile(setup_path) and os.access(setup_path, os.X_OK):
+                self._append_log("Running installer...\n")
+                extra_args = plan_cmds[0][1:]
+                try:
+                    p = _spawn_setup_install(
+                        repo_path,
+                        lambda m: self._append_log(str(m)),
+                        extra_args=extra_args,
+                        capture_stdout=True,
+                        auto_input_seq=[],
+                        use_pty=bool(SETTINGS.get("use_pty", True)),
+                    )
+                    out = getattr(p, "stdout", None)
+                    if p and out is not None:
+                        for line in iter(out.readline, ""):
+                            if not line:
+                                break
+                            self._append_log(str(line))
+                        rc = p.wait()
+                        self._append_log(f"[installer exit {rc}]\n")
+                        # Fallback: if install-files failed, retry plain install
+                        if rc != 0 and "install-files" in extra_args:
+                            self._append_log("[fallback] Retrying with 'install'...\n")
+                            p2 = _spawn_setup_install(
+                                repo_path,
+                                lambda m: self._append_log(str(m)),
+                                extra_args=["install"],
+                                capture_stdout=True,
+                                auto_input_seq=[],
+                                use_pty=bool(SETTINGS.get("use_pty", True)),
+                            )
+                            out2 = getattr(p2, "stdout", None)
+                            if p2 and out2 is not None:
+                                for line in iter(out2.readline, ""):
+                                    if not line:
+                                        break
+                                    self._append_log(str(line))
+                                rc2 = p2.wait()
+                                self._append_log(f"[installer exit {rc2}]\n")
+                    else:
+                        self._append_log("[warn] Installer spawn returned no stdout.\n")
+                except Exception as ex:
+                    self._append_log(f"[installer error] {ex}\n")
+            else:
+                self._append_log("No executable './setup' found. Skipping installer.\n")
 
             GLib.idle_add(
                 lambda: self._finish_update(success, pull.stdout, pull.stderr)
@@ -1196,6 +1280,9 @@ polkit.addRule(function(action, subject) {{
         title = "Update complete" if success else "Update failed"
         details = stdout + ("\n" + stderr if stderr else "")
         self._add_log(title, title, details)
+        # Auto-hide console after finishing
+        if getattr(self, "log_revealer", None):
+            self.log_revealer.set_reveal_child(False)
         self.refresh_status()
         # After update (and installer launch) prompt for tweaks if success
         if success:
@@ -1335,6 +1422,13 @@ class SetupConsole(Gtk.Window):
 
         self.show_all()
 
+        # Track destruction to avoid UI updates after widget is gone
+        self._destroyed = False
+        try:
+            self.connect("destroy", lambda *a: setattr(self, "_destroyed", True))
+        except Exception:
+            pass
+
         self._proc: Optional[subprocess.Popen] = None
         self._password_cached: Optional[str] = None
         self._finished_callback = None
@@ -1359,10 +1453,28 @@ class SetupConsole(Gtk.Window):
             pass
 
     def _append(self, text: str):
-        end = self.buf.get_end_iter()
-        self.buf.insert(end, text)
-        mark = self.buf.create_mark(None, self.buf.get_end_iter(), False)
-        self.textview.scroll_to_mark(mark, 0.0, True, 0.0, 1.0)
+        # Guard against updates after destroy or before realization; degrade gracefully
+        try:
+            if getattr(self, "_destroyed", False) or not self.textview:
+                return
+            tv = self.textview
+            if not tv.get_realized():
+                # If not realized yet, just buffer text without scrolling
+                self.buf.insert(self.buf.get_end_iter(), text)
+                return
+            # Safe insertion using offsets to avoid iterator reuse issues
+            start_offset = self.buf.get_char_count()
+            self.buf.insert(self.buf.get_end_iter(), text)
+            end_offset = self.buf.get_char_count()
+            # Scroll only if still visible
+            if tv.get_visible():
+                start_it = self.buf.get_iter_at_offset(start_offset)
+                end_it = self.buf.get_iter_at_offset(end_offset)
+                # Create mark at end and scroll
+                mark = self.buf.create_mark(None, end_it, False)
+                tv.scroll_to_mark(mark, 0.0, True, 0.0, 1.0)
+        except Exception:
+            pass
 
     def run_process(self, argv: list[str], cwd: Optional[str] = None, on_finished=None):
         """
@@ -1714,11 +1826,15 @@ class SetupConsole(Gtk.Window):
 
 def _init_log_css(self):
     css = """
-    .log-view {
-        font-size: 12px;
-        line-height: 1.25;
-        white-space: pre-wrap;
+    .log-view { /* removed - no embedded log */ }
+    /* Minimal theme for the main banner/status */
+    .status-banner {
+        margin-top: 6px;
+        margin-bottom: 10px;
     }
+    .status-banner.status-up { color: #1e90ff; }
+    .status-banner.status-ok { color: #5cb85c; }
+    .status-banner.status-err { color: #ff4d4f; }
     .ansi-bold     { font-weight: bold; }
     .ansi-dim      { opacity: 0.7; }
     .ansi-italic   { font-style: italic; }
@@ -1756,19 +1872,31 @@ def _init_log_css(self):
 def _append_log(self, text: str):
     """
     Thread-safe append to the embedded log view with ANSI color/style formatting.
-    If called from a background thread, schedule the UI mutation via GLib.idle_add.
+    Defensive against destroyed/unrealized widgets and iterator invalidation.
     """
 
     def do_append():
-        if not hasattr(self, "log_buf"):
+        if not hasattr(self, "log_buf") or not hasattr(self, "log_view"):
             return False
+        buf = self.log_buf
+        lv = self.log_view
         try:
-            buf = self.log_buf
-            _insert_ansi_formatted(buf, text)
-            # Auto scroll safely after insert (guard destroyed widget)
-            mark = buf.create_mark(None, buf.get_end_iter(), False)
-            if hasattr(self, "log_view") and self.log_view.get_visible():
-                self.log_view.scroll_to_mark(mark, 0.0, True, 0.0, 1.0)
+            # If view destroyed or unrealized, degrade to plain append without formatting
+            if not lv.get_realized():
+                buf.insert(buf.get_end_iter(), text)
+                return False
+            # Use safe offset-based insertion; attempt ANSI formatting, fallback to plain
+            buf.get_char_count()
+            try:
+                _insert_ansi_formatted(buf, text)
+            except Exception:
+                buf.insert(buf.get_end_iter(), text)
+            end_offset = buf.get_char_count()
+            # Scroll only if visible & realized
+            if lv.get_visible() and lv.get_realized():
+                end_it = buf.get_iter_at_offset(end_offset)
+                mark = buf.create_mark(None, end_it, False)
+                lv.scroll_to_mark(mark, 0.0, True, 0.0, 1.0)
             # Trim log lines if limit configured
             try:
                 limit = int(SETTINGS.get("log_max_lines", 0))
@@ -1779,8 +1907,19 @@ def _append_log(self, text: str):
             except Exception:
                 pass
         except Exception:
+            # Swallow any GTK/Pango issues
             pass
-        return False  # ensure idle handler runs only once
+        return False
+
+    try:
+        import threading
+
+        if threading.current_thread() is threading.main_thread():
+            do_append()
+        else:
+            GLib.idle_add(do_append)
+    except Exception:
+        pass
 
     try:
         import threading
