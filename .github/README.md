@@ -3,7 +3,7 @@
     <h3></h3>
 </div>
 
-<div align="center">
+<div align="center"> 
 
 ![](https://img.shields.io/github/last-commit/foxyiscoding/illogical-updots?&style=for-the-badge&color=8ad7eb&logo=git&logoColor=D9E0EE&labelColor=1E202B)
 ![](https://img.shields.io/github/stars/foxyiscoding/illogical-updots?style=for-the-badge&logo=andela&color=86dbd7&logoColor=D9E0EE&labelColor=1E202B)
@@ -19,18 +19,26 @@
 <div align="center">
    <p style="float:left; width:400;">REQUIRES:</p> <img src="https://raw.githubusercontent.com/end-4/dots-hyprland/14c115f80a42d4a51dc8b7b860a08c4a30e2d886/.github/assets/illogical-impulse.svg" alt="illogical-impulse logo" style="float:left; width:400;">
 </div>
- <details>
+ <details> 
   <summary>Notable features</summary>
-
+     
   - **Updates**: Allows you to auto execute DotFile updates including pulling, stashing and installing all for you
-  - **Commits changes**: Shows clean overview of the recent commit changes so you know what will change in update
+  - **Commits changes**: Shows clean overview of the recent commit changes so you know what will change in update 
   - **PostInstall script**: Optional  script that will run after installation ( can be anything for post tweaks that gets overwritten by the original install script)
     - **Quick installation**: The app should have all packages and modules installed already by your OS or the dots so it can be runned easily
    - **GTK Based UI** - The ui is made so it fits and feels right with the dotfiles.. It is also coded so its really fast and responsive while keeping the ui smooth and nice
 </details>
-<details>
+<details> 
+  <summary>Plans</summary>
+     
+  - **Uninstall/Repair dots** - Add option to remove, update, repair, reinstall and uninstall the dots
+  - **Dynamic Updater** - Detect if theres need for installing new files or apps. If yes run that part of the script
+  - **Silent Update Notifications** - Background extension that will run on start and check once in a time for update and if found notify you
+  - **Build Appimage file** - Add appimage release so it will be able to be installed as an app
+</details>
+<details> 
   <summary>Installation</summary>
-
+  
    - Current installation script is one time run so you dont have to even install anything which is neat. In future you will be able to install this as an app that will be in your app drawer too.
    - Just run `curl -sL https://raw.githubusercontent.com/FoxyIsCoding/illogical-updots/main/app.py | python
 `
@@ -59,3 +67,4 @@ In future there will be an appimage and a .desktop app ready..
 | <img width="1920" height="1080" alt="image" src="https://github.com/FoxyIsCoding/illogical-updots/blob/main/.github/assets/commits.png?raw=true" /> | <img width="1920" height="1080" alt="image" src="https://github.com/FoxyIsCoding/illogical-updots/blob/main/.github/assets/console.png?raw=true" /> |
 | Customization | Dynamic theme |
 | <img width="1920" height="1080" alt="image" src="https://github.com/FoxyIsCoding/illogical-updots/blob/main/.github/assets/settings.png?raw=true" /> | <img width="1920" height="1080" alt="image" src="https://github.com/FoxyIsCoding/illogical-updots/blob/main/.github/assets/app.png" /> |
+
