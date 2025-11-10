@@ -1572,6 +1572,16 @@ polkit.addRule(function(action, subject) {{
         if getattr(self, "log_revealer", None):
             self.log_revealer.set_reveal_child(False)
         self.refresh_status()
+        # Send notification about pull/update result
+        if bool(SETTINGS.get("send_notifications", True)):
+            try:
+                app = self.get_application()
+                if isinstance(app, Gio.Application):
+                    notif = Gio.Notification.new(title)
+                    notif.set_body("Update succeeded." if success else "Update failed.")
+                    app.send_notification("illogical-updots-update", notif)
+            except Exception:
+                pass
         # After installer completes, run configured post-install script (if any)
         if success:
             self._run_post_script_if_configured()
@@ -1629,6 +1639,20 @@ polkit.addRule(function(action, subject) {{
                     self._append_log(str(line))
                 rc = p.wait()
                 self._append_log(f"[post-script exit {rc}]\n")
+                # Notification for post script completion
+                if bool(SETTINGS.get("send_notifications", True)):
+                    try:
+                        app = self.get_application()
+                        if isinstance(app, Gio.Application):
+                            n = Gio.Notification.new("Post script finished")
+                            n.set_body(
+                                "Exit code 0 (success)"
+                                if rc == 0
+                                else f"Exit code {rc} (errors)"
+                            )
+                            app.send_notification("illogical-updots-post-script", n)
+                    except Exception:
+                        pass
             except Exception as ex:
                 self._append_log(f"[post-script error] {ex}\n")
 
