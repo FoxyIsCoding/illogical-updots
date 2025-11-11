@@ -1,6 +1,6 @@
-# Maintainer: Your Name <you@example.com>
+# Maintainer: Matthew Bielik (matej.bielik@proton.me)
 pkgname=illogical-updots
-pkgver=1.0.6
+pkgver=1.0.7
 pkgrel=1
 pkgdesc="GTK based updater for end4 dotfiles"
 arch=('any')

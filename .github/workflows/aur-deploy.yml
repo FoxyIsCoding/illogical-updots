@@ -1,0 +1,33 @@
+name: Deploy AUR package
+
+on:
+  push:
+    tags:
+      - "*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Publish to AUR
+        uses: KSXGitHub/github-actions-deploy-aur@v2
+        with:
+          pkgname: illogical-updots
+          pkgbuild: ./PKGBUILD
+          updpkgsums: true
+          test: false
+          post_process: makepkg --printsrcinfo > .SRCINFO
+          commit_username: ${{ secrets.AUR_USERNAME }}
+          commit_email: ${{ secrets.AUR_EMAIL }}
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: "Release illogical-updots ${{ github.ref_name }}"
+          ssh_keyscan_types: rsa,ecdsa,ed25519
