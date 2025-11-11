@@ -7,7 +7,7 @@
 
 ![](https://img.shields.io/github/last-commit/foxyiscoding/illogical-updots?&style=for-the-badge&color=8ad7eb&logo=git&logoColor=D9E0EE&labelColor=1E202B)
 ![](https://img.shields.io/github/stars/foxyiscoding/illogical-updots?style=for-the-badge&logo=andela&color=86dbd7&logoColor=D9E0EE&labelColor=1E202B)
-![](https://img.shields.io/github/repo-size/foxyiscoding/illogical-updots?color=86dbce&label=SIZE&logo=protondrive&style=for-the-badge&logoColor=D9E0EE&labelColor=1E202B)
+![AUR Version](https://img.shields.io/aur/version/illogical-updots?style=for-the-badge&logo=archlinux&logoColor=D9E0EE&labelColor=1E202B&color=86dbd7&link=https%3A%2F%2Faur.archlinux.org%2Fpackages%2Fillogical-updots)
 
 
 </div>
@@ -36,17 +36,15 @@
   - **Silent Update Notifications** - Background extension that will run on start and check once in a time for update and if found notify you
   - **Build Appimage file** - Add appimage release so it will be able to be installed as an app
 </details>
-<details> 
+
   <summary>Installation</summary>
-  
-   - Current installation script is one time run so you dont have to even install anything which is neat. In future you will be able to install this as an app that will be in your app drawer too.
-   - Just run `curl -sL https://raw.githubusercontent.com/FoxyIsCoding/illogical-updots/main/app.py | python
-`
-     - Or, clone this repo and run `app.py`
 
-In future there will be an appimage and a .desktop app ready..
+  - We are on AUR so you can simply install it with yay or any aur helper.
+  - ``yay -S illogical-updots``
+  - Or, clone this repo and run `app.py`
 
-</details>
+
+
 
 <div align="center">
     <h2>• screenshots •</h2>
