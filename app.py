@@ -16,17 +16,32 @@ Requirements:
 import os
 import sys
 from typing import Optional
+
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, Gio, GLib
+from gi.repository import Gio, GLib, Gtk
 
-from main_window import MainWindow, APP_ID, APP_TITLE, REPO_PATH, SETTINGS, _save_settings
+from main_window import (
+    APP_ID,
+    APP_TITLE,
+    REPO_PATH,
+    SETTINGS,
+    MainWindow,
+    _save_settings,
+)
 
 
 class App(Gtk.Application):
     def __init__(self) -> None:
         super().__init__(application_id=APP_ID)
+        Gtk.Window.set_default_icon_name("illogical-updots")
+        _icon_file = "/usr/share/icons/hicolor/256x256/apps/illogical-updots.png"
+        if os.path.isfile(_icon_file):
+            try:
+                Gtk.Window.set_default_icon_from_file(_icon_file)
+            except Exception:
+                pass
 
     def do_activate(self) -> None:  # type: ignore[override]
         global REPO_PATH
