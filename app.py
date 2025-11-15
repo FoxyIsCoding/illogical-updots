@@ -17,7 +17,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gio, GLib, Gtk
 
-from  import (
+from main_window import (
     APP_ID,
     APP_TITLE,
     REPO_PATH,
