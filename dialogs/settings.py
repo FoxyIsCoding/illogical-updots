@@ -3,7 +3,7 @@ import os
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk
+from gi.repository import Gdk, Gtk
 
 
 def show_settings_dialog(
@@ -36,12 +36,38 @@ def show_settings_dialog(
     outer.pack_start(listbox, True, True, 0)
 
     def separator() -> None:
+        # Install CSS for separator rows once
+        if not getattr(listbox, "_sep_css_added", False):
+            provider = Gtk.CssProvider()
+            provider.load_from_data(
+                b"""
+                .separator-row {
+                    background: transparent;
+                }
+                .separator-row:hover,
+                .separator-row:active,
+                .separator-row:prelight {
+                    background: transparent;
+                }
+                """
+            )
+            Gtk.StyleContext.add_provider_for_screen(
+                Gdk.Screen.get_default(),
+                provider,
+                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+            )
+            listbox._sep_css_added = True
         row = Gtk.ListBoxRow()
+        # Disable hover/selection/activation effects
+        row.set_activatable(False)
+        row.set_selectable(False)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         box.set_border_width(10)
         sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
         box.pack_start(sep, False, False, 0)
         row.add(box)
+        # Add style class so CSS keeps it transparent on hover
+        row.get_style_context().add_class("separator-row")
         listbox.add(row)
 
     def setting(label: str, widget: Gtk.Widget, tooltip: str = "") -> None:
