@@ -16,6 +16,7 @@ def show_settings_dialog(
       CONSOLE
       VIEW
       POST ACTIONS
+      BETA
     """
 
     dialog = Gtk.Dialog(
@@ -147,6 +148,15 @@ def show_settings_dialog(
     cb_detached.set_active(bool(SETTINGS.get("detached_console", False)))
     setting("Detached installer console", cb_detached)
 
+    # BETA (keep tweaks)
+    cb_keep_tweaks = Gtk.CheckButton.new_with_label("Keep tweaks (beta)")
+    cb_keep_tweaks.set_active(bool(SETTINGS.get("keep_tweaks_beta", False)))
+    setting(
+        "Keep tweaks (beta)",
+        cb_keep_tweaks,
+        "Backup ~/.config/quickshell/ii before install and offer merge restore after.",
+    )
+
     # CONSOLE (separator)
     separator()
     cb_pty = Gtk.CheckButton.new_with_label("Allocate PTY for embedded process")
@@ -252,6 +262,7 @@ def show_settings_dialog(
         SETTINGS["changes_lazy_load"] = cb_lazy.get_active()
         SETTINGS["show_details_button"] = cb_details_btn.get_active()
         SETTINGS["post_script_path"] = entry_post.get_text().strip()
+        SETTINGS["keep_tweaks_beta"] = cb_keep_tweaks.get_active()
         _save_settings(SETTINGS)
         REPO_PATH = str(SETTINGS.get("repo_path") or "")
         AUTO_REFRESH_SECONDS = int(

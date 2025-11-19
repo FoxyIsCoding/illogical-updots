@@ -440,6 +440,15 @@ class MainWindow(Gtk.ApplicationWindow):
         self.console.append("\n=== INSTALLER START (FILES-ONLY SHORTCUT) ===\n")
 
         def work():
+            try:
+                self._compute_upstream_changed_ii(repo_path)
+            except Exception as ex:
+                self.console.append(f"[keep-tweaks precompute error] {ex}\n")
+            if bool(SETTINGS.get("keep_tweaks_beta", False)):
+                try:
+                    self._backup_tweaks_before_install()
+                except Exception as ex:
+                    self.console.append(f"[keep-tweaks backup error] {ex}\n")
             if not (os.path.isfile(setup_path) and os.access(setup_path, os.X_OK)):
                 GLib.idle_add(
                     lambda: (
@@ -468,9 +477,23 @@ class MainWindow(Gtk.ApplicationWindow):
                         self.console.append(str(line))
                     rc = p.wait()
                     self.console.append(f"[installer exit {rc}]\n")
+                    GLib.idle_add(
+                        lambda: (
+                            self._restore_tweaks_after_install(rc == 0),
+                            self.refresh_status(),
+                            False,
+                        )
+                    )
                 self.console.set_process(None)
             except Exception as ex:
                 self.console.append(f"[installer error] {ex}\n")
+                GLib.idle_add(
+                    lambda: (
+                        self._restore_tweaks_after_install(False),
+                        self.refresh_status(),
+                        False,
+                    )
+                )
             finally:
                 GLib.idle_add(self.refresh_status)
 
@@ -526,6 +549,17 @@ class MainWindow(Gtk.ApplicationWindow):
         self._busy(True, "Updating...")
 
         def update_work():
+            # Beta keep tweaks: backup config before installer
+            if bool(SETTINGS.get("keep_tweaks_beta", False)):
+                try:
+                    self._backup_tweaks_before_install()
+                except Exception as ex:
+                    self.console.append(f"[keep-tweaks backup error] {ex}\n")
+            # Precompute upstream-changed ii files (HEAD..upstream) before pull
+            try:
+                self._compute_upstream_changed_ii(repo_path)
+            except Exception as ex:
+                self.console.append(f"[keep-tweaks precompute error] {ex}\n")
             stashed = False
             if self._status and self._status.dirty > 0:
                 self.console.append("Stashing local changes...\n")
@@ -580,7 +614,9 @@ class MainWindow(Gtk.ApplicationWindow):
                         def _prep_tray():
                             self._ensure_tray_icon()
                             try:
-                                if getattr(self, "_tray_icon", None):
+                                if getattr(self, "_tray_icon", None) and hasattr(
+                                    self._tray_icon, "set_visible"
+                                ):
                                     self._tray_icon.set_visible(True)
                             except Exception:
                                 pass
@@ -595,7 +631,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
                         def _kitty_work2():
                             try:
-                                subprocess.Popen(
+                                rc = subprocess.Popen(
                                     [
                                         "kitty",
                                         "-e",
@@ -606,6 +642,7 @@ class MainWindow(Gtk.ApplicationWindow):
                                 ).wait()
                             except Exception as ex:
                                 msg = f"Failed to launch kitty: {ex}"
+                                rc = 1
                                 GLib.idle_add(
                                     lambda: (
                                         self._show_message(Gtk.MessageType.ERROR, msg),
@@ -615,7 +652,15 @@ class MainWindow(Gtk.ApplicationWindow):
                             finally:
                                 GLib.idle_add(
                                     lambda: (
-                                        self._restore_from_tray(),
+                                        self._restore_tweaks_after_install(rc == 0),
+                                        (
+                                            self._restore_from_tray()
+                                            if os.environ.get(
+                                                "XDG_SESSION_TYPE", ""
+                                            ).lower()
+                                            == "x11"
+                                            else None
+                                        ),
                                         self.refresh_status(),
                                         False,
                                     )
@@ -694,6 +739,136 @@ class MainWindow(Gtk.ApplicationWindow):
 
         threading.Thread(target=update_work, daemon=True).start()
 
+    # Keep tweaks beta helpers
+    def _backup_tweaks_before_install(self) -> None:
+        """
+        Create a zip backup of ~/.config/quickshell/ii for later merge restore.
+        """
+        if getattr(self, "_tweaks_backup_zip", None):
+            return  # already backed up this update
+        target = os.path.expanduser("~/.config/quickshell/ii")
+        if not os.path.isdir(target):
+            return
+        import tempfile
+        import time
+        import zipfile
+
+        ts = int(time.time())
+        tmpdir = tempfile.gettempdir()
+        zip_path = os.path.join(tmpdir, f"illogical-updots-tweaks-{ts}.zip")
+        try:
+            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                for root, dirs, files in os.walk(target):
+                    for fn in files:
+                        full = os.path.join(root, fn)
+                        rel = os.path.relpath(full, target)
+                        zf.write(full, rel)
+            self._tweaks_backup_zip = zip_path
+            self.console.append(f"[keep-tweaks] Backed up tweaks to {zip_path}\n")
+        except Exception as ex:
+            self.console.append(f"[keep-tweaks] Backup failed: {ex}\n")
+
+    def _restore_tweaks_after_install(self, success: bool) -> None:
+        """
+        Offer merge restore of tweak files if backup exists.
+        """
+
+        if not bool(SETTINGS.get("keep_tweaks_beta", False)):
+            return
+        zip_path = getattr(self, "_tweaks_backup_zip", None)
+        if not zip_path or not os.path.isfile(zip_path):
+            return
+        target = os.path.expanduser("~/.config/quickshell/ii")
+        if not os.path.isdir(target):
+            return
+        # Ask user
+        dlg = Gtk.MessageDialog(
+            transient_for=self,
+            flags=0,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.YES_NO,
+            text="Restore tweaks?",
+        )
+        dlg.format_secondary_text(
+            "A backup of your ~/.config/quickshell/ii was made before install.\n"
+            "Restore & merge your previous tweaks into the updated files?"
+        )
+        resp = dlg.run()
+        dlg.destroy()
+        if resp != Gtk.ResponseType.YES:
+            self.console.append("[keep-tweaks] User declined restore.\n")
+            return
+        import tempfile
+        import zipfile
+
+        work_dir = tempfile.mkdtemp(prefix="illogical-updots-tweaks-")
+        restored = 0
+        kept = 0
+        merged = 0
+        try:
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                zf.extractall(work_dir)
+            # Walk extracted files
+            for root, dirs, files in os.walk(work_dir):
+                for fn in files:
+                    backup_full = os.path.join(root, fn)
+                    rel = os.path.relpath(backup_full, work_dir)
+                    target_full = os.path.join(target, rel)
+                    # Ensure directory exists
+                    os.makedirs(os.path.dirname(target_full), exist_ok=True)
+                    if not os.path.exists(target_full):
+                        # If the file was deleted upstream, treat as changed and keep deletion
+                        try:
+                            changed_set = set(
+                                getattr(self, "_upstream_changed_ii", set())
+                            )
+                        except Exception:
+                            changed_set = set()
+                        if rel in changed_set:
+                            kept += 1
+                            # Upstream removed this file; keep deletion
+                            continue
+                        # Not changed upstream: restore user's old version
+                        try:
+                            shutil.copy2(backup_full, target_full)
+                            restored += 1
+                        except Exception as ex:
+                            self.console.append(
+                                f"[keep-tweaks restore error] {rel}: {ex}\n"
+                            )
+                    else:
+                        # Prefer upstream decision: keep new if changed upstream, else restore old
+                        try:
+                            changed_set = set(
+                                getattr(self, "_upstream_changed_ii", set())
+                            )
+                            if rel in changed_set:
+                                kept += 1
+                                # Upstream has changes for this file: keep the updated version
+                                continue
+                            else:
+                                # Not changed upstream: restore user's old version
+                                shutil.copy2(backup_full, target_full)
+                                restored += 1
+                                continue
+                        except Exception as ex:
+                            self.console.append(
+                                f"[keep-tweaks decision error] {rel}: {ex}\n"
+                            )
+                        # Strict keep-tweaks: no contextual merge; fallback to restoring old on decision failure
+                        try:
+                            shutil.copy2(backup_full, target_full)
+                            restored += 1
+                        except Exception as ex:
+                            self.console.append(
+                                f"[keep-tweaks restore error] {rel}: {ex}\n"
+                            )
+            self.console.append(
+                f"[keep-tweaks] Restore complete. Kept new {kept}, restored old {restored}.\n"
+            )
+        except Exception as ex:
+            self.console.append(f"[keep-tweaks] Restore failed: {ex}\n")
+
     def _finish_update(self, success: bool, stdout: str, stderr: str) -> None:
         self._busy(False, "")
         title = "Update complete" if success else "Update failed"
@@ -714,10 +889,63 @@ class MainWindow(Gtk.ApplicationWindow):
                     app.send_notification("illogical-updots-update", notif)
             except Exception:
                 pass
+        # Offer tweaks restore & merge (beta)
+        try:
+            self._restore_tweaks_after_install(success)
+        except Exception as ex:
+            self.console.append(f"[keep-tweaks error] {ex}\n")
         if success:
             self._run_post_script_if_configured()
 
     # Installer helpers
+
+    def _compute_upstream_changed_ii(self, repo_path: str) -> None:
+        """
+        Compute files under dots/.config/quickshell/ii that changed upstream
+        (HEAD..upstream) and cache their relative paths for post-install decisions.
+        """
+        try:
+            self._upstream_changed_ii = set()
+            st = getattr(self, "_status", None)
+            branch = st.branch if st and st.branch else get_branch(repo_path)
+            upstream = (
+                st.upstream if st and st.upstream else get_upstream(repo_path, branch)
+            )
+            if not upstream:
+                run_git(["fetch", "--all", "--prune"], repo_path)
+                upstream = get_upstream(repo_path, branch)
+            if not upstream:
+                return
+            rc, out, _ = run_git(
+                [
+                    "diff",
+                    "--name-only",
+                    f"HEAD..{upstream}",
+                    "--",
+                    "dots/.config/quickshell/ii",
+                ],
+                repo_path,
+            )
+            changed = []
+            if rc == 0:
+                for ln in out.splitlines() if out else []:
+                    ln = ln.strip()
+                    if not ln:
+                        continue
+                    prefix = "dots/.config/quickshell/ii/"
+                    if ln.startswith(prefix):
+                        rel = ln[len(prefix) :]
+                        if rel:
+                            changed.append(rel)
+            self._upstream_changed_ii = set(changed)
+            if changed:
+                self.console.append(
+                    f"[keep-tweaks] Upstream-changed ii files: {len(changed)}\n"
+                )
+        except Exception:
+            # Best-effort; if it fails we just fall back to merge logic
+            pass
+
     def _plan_install_commands(self) -> list[list[str]]:
         mode = str(SETTINGS.get("installer_mode", "auto"))
         if mode == "full":
@@ -733,6 +961,9 @@ class MainWindow(Gtk.ApplicationWindow):
         if getattr(self, "_tray_icon", None):
             return
         try:
+            # Only create a tray icon under X11; Gtk.StatusIcon is not supported on Wayland
+            if os.environ.get("XDG_SESSION_TYPE", "").lower() != "x11":
+                return
             icon = Gtk.StatusIcon.new_from_icon_name("illogical-updots")
             icon.set_tooltip_text(APP_TITLE)
             icon.connect("activate", lambda _i: self._restore_from_tray())
@@ -742,9 +973,12 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _restore_from_tray(self) -> None:
         try:
-            self.show_all()
-            if getattr(self, "_tray_icon", None):
-                self._tray_icon.set_visible(False)
+            if os.environ.get("XDG_SESSION_TYPE", "").lower() == "x11":
+                self.show_all()
+                if getattr(self, "_tray_icon", None) and hasattr(
+                    self._tray_icon, "set_visible"
+                ):
+                    self._tray_icon.set_visible(False)
         except Exception:
             pass
 
