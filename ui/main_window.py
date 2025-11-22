@@ -433,32 +433,60 @@ class MainWindow(Gtk.ApplicationWindow):
         return False
 
     def _run_update_without_pull(self) -> None:
-        # Run files-only installer in embedded console without pulling
+        # Run files-only installer without pulling (manual shortcut)
         repo_path = self._status.repo_path if self._status else REPO_PATH
         setup_path = os.path.join(repo_path, "setup")
         self.console.ensure_open()
         self.console.append("\n=== INSTALLER START (FILES-ONLY SHORTCUT) ===\n")
 
-        def work():
-            try:
-                self._compute_upstream_changed_ii(repo_path)
-            except Exception as ex:
-                self.console.append(f"[keep-tweaks precompute error] {ex}\n")
-            if bool(SETTINGS.get("keep_tweaks_beta", False)):
+        # Confirm before running
+        dlg = Gtk.MessageDialog(
+            transient_for=self,
+            flags=0,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.NONE,
+            text="Run files-only installer?",
+        )
+        dlg.format_secondary_text(
+            "This will execute './setup install-files' without pulling upstream.\nProceed?"
+        )
+        dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        dlg.add_button("Install", Gtk.ResponseType.YES)
+        r = dlg.run()
+        dlg.destroy()
+        if r != Gtk.ResponseType.YES:
+            self.console.append("[install-files] User canceled.\n")
+            return
+
+        # Optional backup confirmation
+        if bool(SETTINGS.get("keep_fish_config", False)) and not getattr(
+            self, "_fish_config_backup_zip", None
+        ):
+            dlg2 = Gtk.MessageDialog(
+                transient_for=self,
+                flags=0,
+                message_type=Gtk.MessageType.QUESTION,
+                buttons=Gtk.ButtonsType.NONE,
+                text="Backup fish config?",
+            )
+            dlg2.format_secondary_text(
+                "Backup ~/.config/fish before running installer?\n(Will allow restore after.)"
+            )
+            dlg2.add_button("Skip", Gtk.ResponseType.NO)
+            dlg2.add_button("Backup", Gtk.ResponseType.YES)
+            r2 = dlg2.run()
+            dlg2.destroy()
+            if r2 == Gtk.ResponseType.YES:
                 try:
-                    self._backup_tweaks_before_install()
+                    self._backup_fish_config_before_install()
                 except Exception as ex:
-                    self.console.append(f"[keep-tweaks backup error] {ex}\n")
-            if not (os.path.isfile(setup_path) and os.access(setup_path, os.X_OK)):
-                GLib.idle_add(
-                    lambda: (
-                        self._show_message(
-                            Gtk.MessageType.INFO, "No executable './setup' found."
-                        ),
-                        False,
-                    )
-                )
-                return
+                    self.console.append(f"[keep-fish-config backup error] {ex}\n")
+
+        if not (os.path.isfile(setup_path) and os.access(setup_path, os.X_OK)):
+            self._show_message(Gtk.MessageType.INFO, "No executable './setup' found.")
+            return
+
+        def work():
             try:
                 p = _spawn_setup_install(
                     repo_path,
@@ -479,17 +507,19 @@ class MainWindow(Gtk.ApplicationWindow):
                     self.console.append(f"[installer exit {rc}]\n")
                     GLib.idle_add(
                         lambda: (
-                            self._restore_tweaks_after_install(rc == 0),
+                            self._restore_fish_config_after_install(True),
                             self.refresh_status(),
                             False,
                         )
                     )
+                else:
+                    self.console.append("[warn] No stdout from installer.\n")
                 self.console.set_process(None)
             except Exception as ex:
                 self.console.append(f"[installer error] {ex}\n")
                 GLib.idle_add(
                     lambda: (
-                        self._restore_tweaks_after_install(False),
+                        self._restore_fish_config_after_install(True),
                         self.refresh_status(),
                         False,
                     )
@@ -534,6 +564,50 @@ class MainWindow(Gtk.ApplicationWindow):
             return
         repo_path = self._status.repo_path
 
+        # PRE-UPDATE CONFIRMATION (before any pull/backup/stash)
+        dlg = Gtk.MessageDialog(
+            transient_for=self,
+            flags=0,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.NONE,
+            text="Run update now?",
+        )
+        dlg.format_secondary_text(
+            "This will pull upstream changes and then run the installer.\nProceed?"
+        )
+        dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        dlg.add_button("Update", Gtk.ResponseType.YES)
+        resp = dlg.run()
+        dlg.destroy()
+        if resp != Gtk.ResponseType.YES:
+            self.console.append("[update] User canceled before start.\n")
+            return
+
+        # Optional fish config backup confirmation (before starting worker thread)
+        if bool(SETTINGS.get("keep_fish_config", False)) and not getattr(
+            self, "_fish_config_backup_zip", None
+        ):
+            dlg2 = Gtk.MessageDialog(
+                transient_for=self,
+                flags=0,
+                message_type=Gtk.MessageType.QUESTION,
+                buttons=Gtk.ButtonsType.NONE,
+                text="Backup fish config?",
+            )
+            dlg2.format_secondary_text(
+                "Backup ~/.config/fish (including config.fish and functions/) before install so it can be restored after?"
+            )
+            dlg2.add_button("Skip", Gtk.ResponseType.NO)
+            dlg2.add_button("Backup", Gtk.ResponseType.YES)
+            resp2 = dlg2.run()
+            dlg2.destroy()
+            if resp2 == Gtk.ResponseType.YES:
+                try:
+                    # Adjust backup to whole fish directory instead of conf subdir.
+                    self._backup_fish_config_before_install()
+                except Exception as ex:
+                    self.console.append(f"[keep-fish-config backup error] {ex}\n")
+
         mode = str(SETTINGS.get("installer_mode", "auto"))
         if mode == "auto":
             full = self._auto_mode_decide_full(repo_path)
@@ -549,17 +623,13 @@ class MainWindow(Gtk.ApplicationWindow):
         self._busy(True, "Updating...")
 
         def update_work():
-            # Beta keep tweaks: backup config before installer
-            if bool(SETTINGS.get("keep_tweaks_beta", False)):
-                try:
-                    self._backup_tweaks_before_install()
-                except Exception as ex:
-                    self.console.append(f"[keep-tweaks backup error] {ex}\n")
-            # Precompute upstream-changed ii files (HEAD..upstream) before pull
+            # Precompute upstream-changed files (legacy logic kept)
             try:
                 self._compute_upstream_changed_ii(repo_path)
             except Exception as ex:
-                self.console.append(f"[keep-tweaks precompute error] {ex}\n")
+                self.console.append(f"[precompute error] {ex}\n")
+
+            # Stash local changes if dirty
             stashed = False
             if self._status and self._status.dirty > 0:
                 self.console.append("Stashing local changes...\n")
@@ -608,7 +678,6 @@ class MainWindow(Gtk.ApplicationWindow):
                 full = True
             if mode_local in ("auto", "full"):
                 if full:
-                    # Prefer external terminal (kitty) for full install
                     if shutil.which("kitty") is not None:
 
                         def _prep_tray():
@@ -629,7 +698,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
                         GLib.idle_add(_prep_tray)
 
-                        def _kitty_work2():
+                        def _kitty_work():
                             try:
                                 rc = subprocess.Popen(
                                     [
@@ -652,7 +721,7 @@ class MainWindow(Gtk.ApplicationWindow):
                             finally:
                                 GLib.idle_add(
                                     lambda: (
-                                        self._restore_tweaks_after_install(rc == 0),
+                                        self._restore_fish_config_after_install(True),
                                         (
                                             self._restore_from_tray()
                                             if os.environ.get(
@@ -666,14 +735,14 @@ class MainWindow(Gtk.ApplicationWindow):
                                     )
                                 )
 
-                        threading.Thread(target=_kitty_work2, daemon=True).start()
+                        threading.Thread(target=_kitty_work, daemon=True).start()
                         return
                     else:
                         plan_cmds = [["./setup", "install"]]
                 else:
                     plan_cmds = [["./setup", "install-files"]]
 
-            # Run installer (embedded)
+            # Embedded installer path
             setup_path = os.path.join(repo_path, "setup")
             if os.path.isfile(setup_path) and os.access(setup_path, os.X_OK):
                 self.console.append("Running installer...\n")
@@ -700,7 +769,6 @@ class MainWindow(Gtk.ApplicationWindow):
                         self.console.append(f"[installer exit {rc}]\n")
                         self.console.set_process(None)
                         if rc != 0 and "install-files" in extra_args:
-                            # Fallback to full install if minimal fails
                             self.console.append(
                                 "[fallback] Retrying with 'install'...\n"
                             )
@@ -739,14 +807,14 @@ class MainWindow(Gtk.ApplicationWindow):
 
         threading.Thread(target=update_work, daemon=True).start()
 
-    # Keep tweaks beta helpers
-    def _backup_tweaks_before_install(self) -> None:
+    # Keep fish config helpers
+    def _backup_fish_config_before_install(self) -> None:
         """
-        Create a zip backup of ~/.config/quickshell/ii for later merge restore.
+        Create a zip backup of ~/.config/fish for later restore.
         """
-        if getattr(self, "_tweaks_backup_zip", None):
+        if getattr(self, "_fish_config_backup_zip", None):
             return  # already backed up this update
-        target = os.path.expanduser("~/.config/quickshell/ii")
+        target = os.path.expanduser("~/.config/fish")
         if not os.path.isdir(target):
             return
         import tempfile
@@ -755,7 +823,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
         ts = int(time.time())
         tmpdir = tempfile.gettempdir()
-        zip_path = os.path.join(tmpdir, f"illogical-updots-tweaks-{ts}.zip")
+        zip_path = os.path.join(tmpdir, f"illogical-updots-fish-config-{ts}.zip")
         try:
             with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
                 for root, dirs, files in os.walk(target):
@@ -763,238 +831,79 @@ class MainWindow(Gtk.ApplicationWindow):
                         full = os.path.join(root, fn)
                         rel = os.path.relpath(full, target)
                         zf.write(full, rel)
-            self._tweaks_backup_zip = zip_path
-            self.console.append(f"[keep-tweaks] Backed up tweaks to {zip_path}\n")
+            self._fish_config_backup_zip = zip_path
+            self.console.append(
+                f"[keep-fish-config] Backed up fish config to {zip_path}\n"
+            )
         except Exception as ex:
-            self.console.append(f"[keep-tweaks] Backup failed: {ex}\n")
+            self.console.append(f"[keep-fish-config] Backup failed: {ex}\n")
 
-    def _restore_tweaks_after_install(self, success: bool) -> None:
+    def _restore_fish_config_after_install(self, success: bool) -> None:
         """
-        Per-file interactive restore of tweak files (only prompt when content differs).
+        Restore fish config backup (simple overwrite) after install.
 
-        Updated logic:
-        - Skip entirely if keep_tweaks_beta disabled or no backup.
-        - Extract backup.
-        - Enumerate backup files.
-        - Upstream-changed or upstream-deleted files: keep new (no prompt).
-        - If backup vs new file identical: auto keep new (no prompt).
-        - Otherwise show a clean boxed dialog with a COLORED diff.
-            * Restore = replace updated file with backup (your tweaks) after saving current as .tweaks.bak
-            * Keep New = leave updated file untouched
-        - Summary printed to console.
+        Behavior:
+        - Runs if setting keep_fish_config enabled and a backup zip exists (regardless of installer success).
+        - Prompts once (Yes/No) whether to restore (even if install failed).
+        - If Yes: extracts backup zip overwriting the entire ~/.config/fish directory
+          including config.fish, functions/, and any subfolders.
+        - Logs result to console.
         """
-        if not bool(SETTINGS.get("keep_tweaks_beta", False)):
+        if not bool(SETTINGS.get("keep_fish_config", False)):
             return
-        zip_path = getattr(self, "_tweaks_backup_zip", None)
+        zip_path = getattr(self, "_fish_config_backup_zip", None)
         if not zip_path or not os.path.isfile(zip_path):
             return
-        target = os.path.expanduser("~/.config/quickshell/ii")
-        if not os.path.isdir(target):
-            return
-
-        import difflib
-        import tempfile
+        target = os.path.expanduser("~/.config/fish")
+        import shutil
         import zipfile
 
-        work_dir = tempfile.mkdtemp(prefix="illogical-updots-tweaks-")
-        try:
-            with zipfile.ZipFile(zip_path, "r") as zf:
-                zf.extractall(work_dir)
-        except Exception as ex:
-            self.console.append(f"[keep-tweaks] Failed to extract backup: {ex}\n")
-            return
-
-        # Upstream change tracking removed (simplified logic):
-        # We only prompt when file content differs or file was deleted.
-        # Identical content -> auto keep new. Missing current file -> prompt.
-
-        # Gather backup files
-        all_backup_files = []
-        for root, _dirs, files in os.walk(work_dir):
-            for fn in files:
-                backup_full = os.path.join(root, fn)
-                rel = os.path.relpath(backup_full, work_dir)
-                all_backup_files.append((rel, backup_full))
-
-        if not all_backup_files:
-            self.console.append("[keep-tweaks] Backup contained no files.\n")
-            return
-
-        restored_count = 0
-        kept_count = 0
-        skipped_count = 0
-
-        # If huge number of files, ask once for bulk action
-        if len(all_backup_files) > 200:
-            dlg_bulk = Gtk.MessageDialog(
+        def _prompt_and_restore():
+            dlg = Gtk.MessageDialog(
                 transient_for=self,
                 flags=0,
                 message_type=Gtk.MessageType.QUESTION,
                 buttons=Gtk.ButtonsType.NONE,
-                text="Large backup",
+                text="Restore fish config backup?",
             )
-            dlg_bulk.format_secondary_text(
-                f"{len(all_backup_files)} files in backup.\n"
-                "Restore all unchanged files automatically?\n"
-                "Yes = restore all non-upstream-changed.\nNo = prompt file-by-file."
+            dlg.format_secondary_text(
+                "Restore previously backed up ~/.config/fish now?\n"
+                "Yes = overwrite current files with backup.\nNo = keep current files."
             )
-            dlg_bulk.add_button("No (prompt)", Gtk.ResponseType.NO)
-            dlg_bulk.add_button("Yes (auto restore unchanged)", Gtk.ResponseType.YES)
-            r_bulk = dlg_bulk.run()
-            dlg_bulk.destroy()
-            auto_restore = r_bulk == Gtk.ResponseType.YES
-        else:
-            auto_restore = False
-
-        for rel, backup_full in all_backup_files:
-            target_full = os.path.join(target, rel)
-            os.makedirs(os.path.dirname(target_full), exist_ok=True)
-
-            # Determine initial action:
-            # If current file missing -> treat as difference (prompt user).
-            # If present -> will compare contents to decide (prompt only if different).
-            if not os.path.exists(target_full):
-                action = None  # missing: prompt
-            else:
-                action = None  # will compare later
-
-            if auto_restore and action is None:
-                action = Gtk.ResponseType.YES  # bulk restore for unchanged
-
-            # Interactive prompt if not decided yet
-            if action is None:
-                # Prepare a short diff preview (first 20 lines of unified diff)
-                diff_preview = ""
-                diff_lines = []
+            dlg.add_button("No", Gtk.ResponseType.NO)
+            dlg.add_button("Yes", Gtk.ResponseType.YES)
+            r = dlg.run()
+            dlg.destroy()
+            if r == Gtk.ResponseType.YES:
                 try:
-                    with open(
-                        backup_full, "r", encoding="utf-8", errors="ignore"
-                    ) as f_old:
-                        old_lines = f_old.readlines()
-                    if os.path.exists(target_full):
-                        with open(
-                            target_full, "r", encoding="utf-8", errors="ignore"
-                        ) as f_new:
-                            new_lines = f_new.readlines()
-                    else:
-                        new_lines = []
-                    # If identical (and file existed), skip prompt (auto keep new)
-                    if new_lines and old_lines == new_lines:
-                        kept_count += 1
-                        continue
-                    # If file missing or differs -> proceed to diff / prompt
-                    diff_lines = list(
-                        difflib.unified_diff(
-                            new_lines,
-                            old_lines,
-                            fromfile="updated",
-                            tofile="backup",
-                            lineterm="",
-                        )
-                    )
-                    # Truncate for preview rendering; full diff kept in memory
-                    if diff_lines:
-                        diff_preview = diff_lines[:200]
-                except Exception:
-                    diff_lines = []
-                    diff_preview = []
-
-                # Custom boxed dialog (cleaner UI) with colored diff
-                dlg = Gtk.Dialog(
-                    title="Restore previous version", transient_for=self, flags=0
-                )
-                dlg.add_button("Keep New", Gtk.ResponseType.NO)
-                dlg.add_button("Restore", Gtk.ResponseType.YES)
-                content = dlg.get_content_area()
-                box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-                box.set_border_width(16)
-                content.add(box)
-
-                # Filename header
-                lbl_title = Gtk.Label()
-                lbl_title.set_xalign(0.0)
-                lbl_title.set_use_markup(True)
-                lbl_title.set_markup(f"<b>{GLib.markup_escape_text(rel)}</b>")
-                box.pack_start(lbl_title, False, False, 0)
-
-                # Explanation
-                lbl_info = Gtk.Label()
-                lbl_info.set_xalign(0.0)
-                lbl_info.set_use_markup(True)
-                lbl_info.set_line_wrap(True)
-                lbl_info.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
-                lbl_info.set_markup(
-                    "<small>Restore = use backup (your tweaks)\nKeep New = keep updated file</small>"
-                )
-                box.pack_start(lbl_info, False, False, 0)
-
-                # Colored diff (only when content actually differs)
-                if diff_lines:
-                    frame = Gtk.Frame()
-                    frame.set_shadow_type(Gtk.ShadowType.IN)
-                    box.pack_start(frame, True, True, 0)
-                    sw_diff = Gtk.ScrolledWindow()
-                    sw_diff.set_policy(
-                        Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC
-                    )
-                    sw_diff.set_min_content_height(260)
-                    frame.add(sw_diff)
-                    tv = Gtk.TextView()
-                    tv.set_editable(False)
-                    tv.set_cursor_visible(False)
-                    tv.modify_font(Pango.FontDescription("Monospace 10"))
-                    buf = tv.get_buffer()
-                    # Tag definitions
-                    tag_add = buf.create_tag(None, foreground="#A3BE8C")
-                    tag_del = buf.create_tag(None, foreground="#BF616A")
-                    tag_hunk = buf.create_tag(None, foreground="#EBCB8B")
-                    tag_meta = buf.create_tag(None, foreground="#5E81AC")
-                    tag_norm = buf.create_tag(None, foreground="#D8DEE9")
-                    for line in diff_preview:
-                        line_text = line + ("\n" if not line.endswith("\n") else "")
-                        start_iter = buf.get_end_iter()
-                        buf.insert(start_iter, line_text)
-                        end_iter = buf.get_end_iter()
-                        if line.startswith("@@"):
-                            buf.apply_tag(tag_hunk, start_iter, end_iter)
-                        elif line.startswith("+") and not line.startswith("+++"):
-                            buf.apply_tag(tag_add, start_iter, end_iter)
-                        elif line.startswith("-") and not line.startswith("---"):
-                            buf.apply_tag(tag_del, start_iter, end_iter)
-                        elif (
-                            line.startswith("diff ")
-                            or line.startswith("---")
-                            or line.startswith("+++")
-                        ):
-                            buf.apply_tag(tag_meta, start_iter, end_iter)
-                        else:
-                            buf.apply_tag(tag_norm, start_iter, end_iter)
-                    sw_diff.add(tv)
-
-                dlg.show_all()
-                resp = dlg.run()
-                dlg.destroy()
-                action = resp
-
-            if action == Gtk.ResponseType.YES:
-                try:
-                    # Save current new file for rollback if it exists
-                    if os.path.exists(target_full):
+                    if os.path.isdir(target):
+                        # Preserve current as .restore.bak
+                        bak = target + ".restore.bak"
                         try:
-                            shutil.copy2(target_full, target_full + ".tweaks.bak")
+                            if os.path.isdir(bak):
+                                shutil.rmtree(bak)
+                            shutil.copytree(target, bak)
                         except Exception:
                             pass
-                    shutil.copy2(backup_full, target_full)
-                    restored_count += 1
+                    os.makedirs(target, exist_ok=True)
+                    with zipfile.ZipFile(zip_path, "r") as zf:
+                        for member in zf.namelist():
+                            dest = os.path.join(target, member)
+                            os.makedirs(os.path.dirname(dest), exist_ok=True)
+                            with zf.open(member) as src, open(dest, "wb") as dst:
+                                dst.write(src.read())
+                    self.console.append(
+                        f"[keep-fish-config] Restored config from {zip_path}\n"
+                    )
                 except Exception as ex:
-                    self.console.append(f"[keep-tweaks restore error] {rel}: {ex}\n")
-                    skipped_count += 1
+                    self.console.append(f"[keep-fish-config] Restore failed: {ex}\n")
             else:
-                kept_count += 1
+                self.console.append(
+                    "[keep-fish-config] User chose not to restore backup.\n"
+                )
+            return False
 
-        self.console.append(
-            f"[keep-tweaks] Interactive restore finished. Restored {restored_count}, kept new {kept_count}, skipped {skipped_count}.\n"
-        )
+        GLib.idle_add(_prompt_and_restore)
 
     def _finish_update(self, success: bool, stdout: str, stderr: str) -> None:
         self._busy(False, "")
@@ -1018,9 +927,9 @@ class MainWindow(Gtk.ApplicationWindow):
                 pass
         # Offer tweaks restore & merge (beta)
         try:
-            self._restore_tweaks_after_install(success)
+            self._restore_fish_config_after_install(True)
         except Exception as ex:
-            self.console.append(f"[keep-tweaks error] {ex}\n")
+            self.console.append(f"[keep-fish-config error] {ex}\n")
         if success:
             self._run_post_script_if_configured()
 
@@ -1067,7 +976,7 @@ class MainWindow(Gtk.ApplicationWindow):
             self._upstream_changed_ii = set(changed)
             if changed:
                 self.console.append(
-                    f"[keep-tweaks] Upstream-changed ii files: {len(changed)}\n"
+                    f"[info] Upstream-changed ii files: {len(changed)}\n"
                 )
         except Exception:
             # Best-effort; if it fails we just fall back to merge logic

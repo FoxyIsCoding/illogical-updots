@@ -40,7 +40,7 @@ DEFAULT_SETTINGS: Dict[str, object] = {
     "changes_lazy_load": True,  # Lazy load commit list
     "post_script_path": "",  # Optional script executed after install
     "show_details_button": True,  # Show small details link under banner
-    "keep_tweaks_beta": False,  # Backup & merge restore of ~/.config/quickshell/ii after install
+    "keep_fish_config": False,  # Backup & restore entire ~/.config/fish (config.fish, functions/, subfolders) before and after install
 }
 
 
