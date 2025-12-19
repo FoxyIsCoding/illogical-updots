@@ -730,6 +730,7 @@ class MainWindow(Gtk.ApplicationWindow):
                                             == "x11"
                                             else None
                                         ),
+                                        self._run_post_script_if_configured(),
                                         self.refresh_status(),
                                         False,
                                     )
