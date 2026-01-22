@@ -1,15 +1,57 @@
+import re
 import threading
 import time
+import webbrowser
+from typing import Optional, Tuple
+
 import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 gi.require_version("Pango", "1.0")
 gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import Gtk, Gdk, Pango, GLib, GdkPixbuf
+from gi.repository import Gdk, GdkPixbuf, GLib, Gtk, Pango
 
-from widgets.avatars import guess_github_avatar
 from helpers.ansi import insert_ansi_formatted
+from widgets.avatars import guess_github_avatar
+
+
+def parse_github_slug(remote_url: str) -> Optional[Tuple[str, str]]:
+    """
+    Parse a GitHub remote URL into (owner, repo) slug.
+
+    Examples supported:
+        - https://github.com/owner/repo.git
+        - https://github.com/owner/repo
+        - git@github.com:owner/repo.git
+        - ssh://git@github.com/owner/repo.git
+    """
+    if not remote_url:
+        return None
+
+    url = remote_url.strip()
+
+    # SSH forms
+    m = re.match(r"^git@github\.com:(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?$", url)
+    if m:
+        return m.group("owner"), m.group("repo")
+
+    m = re.match(
+        r"^(?:ssh://)?git@github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?$",
+        url,
+    )
+    if m:
+        return m.group("owner"), m.group("repo")
+
+    # HTTPS forms
+    m = re.match(
+        r"^https?://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?(?:/)?$",
+        url,
+    )
+    if m:
+        return m.group("owner"), m.group("repo")
+
+    return None
 
 
 def format_ago(iso_str: str) -> str:
@@ -34,17 +76,49 @@ def format_ago(iso_str: str) -> str:
         return iso_str
 
 
-def build_row(c: dict, list_box: Gtk.ListBox) -> Gtk.Widget:
+def build_row(
+    c: dict, list_box: Gtk.ListBox, github_slug: Optional[Tuple[str, str]] = None
+) -> Gtk.Widget:
+    # Create an EventBox to make the entire row clickable
+    event_box = Gtk.EventBox()
+
     row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
     row.set_hexpand(True)
+    event_box.add(row)
+
+    # Make the row clickable if we have a GitHub slug
+    if github_slug:
+        owner, repo = github_slug
+        commit_hash = c.get("full", "")
+        if commit_hash:
+            url = f"https://github.com/{owner}/{repo}/commit/{commit_hash}"
+
+            def on_click(widget, event):
+                if event.button == 1:  # Left click only
+                    try:
+                        webbrowser.open(url)
+                    except Exception as e:
+                        print(f"Failed to open browser: {e}")
+                    return True
+                return False
+
+            event_box.connect("button-press-event", on_click)
+
+            # Add hover cursor
+            def on_realize(widget):
+                window = widget.get_window()
+                if window:
+                    window.set_cursor(
+                        Gdk.Cursor.new_from_name(Gdk.Display.get_default(), "pointer")
+                    )
+
+            event_box.connect("realize", on_realize)
 
     # Placeholder avatar inside rounded background container; lazy-load actual GitHub avatar
     avatar_bg = Gtk.EventBox()
     avatar_bg.set_size_request(36, 36)
     avatar_bg.get_style_context().add_class("avatar-bg")
-    avatar = Gtk.Image.new_from_icon_name(
-        "avatar-default-symbolic", Gtk.IconSize.MENU
-    )
+    avatar = Gtk.Image.new_from_icon_name("avatar-default-symbolic", Gtk.IconSize.MENU)
     avatar_bg.add(avatar)
     row.pack_start(avatar_bg, False, False, 0)
 
@@ -107,17 +181,13 @@ def build_row(c: dict, list_box: Gtk.ListBox) -> Gtk.Widget:
                             )
                             or pixbuf
                         )
-                        surface = cairo.ImageSurface(
-                            cairo.FORMAT_ARGB32, size, size
-                        )
+                        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, size, size)
                         ctx = cairo.Context(surface)
                         ctx.arc(size / 2.0, size / 2.0, size / 2.0, 0, 2 * math.pi)
                         ctx.clip()
                         Gdk.cairo_set_source_pixbuf(ctx, scaled, 0, 0)
                         ctx.paint()
-                        rounded = Gdk.pixbuf_get_from_surface(
-                            surface, 0, 0, size, size
-                        )
+                        rounded = Gdk.pixbuf_get_from_surface(surface, 0, 0, size, size)
                         if rounded:
                             avatar.set_from_pixbuf(rounded)
                         else:
@@ -132,11 +202,13 @@ def build_row(c: dict, list_box: Gtk.ListBox) -> Gtk.Widget:
 
     threading.Thread(target=load_avatar, daemon=True).start()
 
-    row.show_all()
-    return row
+    event_box.show_all()
+    return event_box
 
 
-def apply_filter(search_entry: Gtk.SearchEntry, list_box: Gtk.ListBox, commits_data: list):
+def apply_filter(
+    search_entry: Gtk.SearchEntry, list_box: Gtk.ListBox, commits_data: list
+):
     q = search_entry.get_text().strip().lower()
     children = list_box.get_children()
     if not q:
@@ -168,6 +240,7 @@ def on_view_changes_quick(window: Gtk.Window, run_git) -> None:
     - Shows commit avatar, subject, author, date and 'ago'
     - If > 15 commits, shows a search box to filter results live
     - Incremental, lazy rendering with per-row reveal animation and lazy avatar fetch
+    - Click on any commit to open it in GitHub
     """
     st = getattr(window, "_status", None)
     if not (st and st.upstream):
@@ -175,6 +248,13 @@ def on_view_changes_quick(window: Gtk.Window, run_git) -> None:
         return
     repo_path = st.repo_path
     upstream = st.upstream
+
+    # Get GitHub slug for clickable commits
+    github_slug = None
+    rc, out, _ = run_git(["remote", "get-url", "origin"], repo_path)
+    remote_url = out.strip() if rc == 0 else ""
+    if remote_url:
+        github_slug = parse_github_slug(remote_url)
 
     dialog = Gtk.Window(title="Pending Commits")
     dialog.set_transient_for(window)
@@ -290,13 +370,15 @@ def on_view_changes_quick(window: Gtk.Window, run_git) -> None:
                     # Enable search if many
                     if len(commits_data) > 15:
                         search_entry.show()
-                        search_entry.connect("changed", lambda e: apply_filter(e, list_box, commits_data))
+                        search_entry.connect(
+                            "changed", lambda e: apply_filter(e, list_box, commits_data)
+                        )
                     return False
                 c = commits_data[i]
                 index["i"] = i + 1
 
                 # Build row and wrap in revealer for animation
-                row = build_row(c, list_box)
+                row = build_row(c, list_box, github_slug)
                 revealer = Gtk.Revealer()
                 revealer.set_transition_type(Gtk.RevealerTransitionType.CROSSFADE)
                 revealer.set_transition_duration(160)

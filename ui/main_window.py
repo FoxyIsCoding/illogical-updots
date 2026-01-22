@@ -52,6 +52,7 @@ from dialogs.about import show_about_dialog
 from dialogs.changes import on_view_changes_quick
 from dialogs.details import show_repo_info_dialog
 from dialogs.logs import show_logs_dialog
+from dialogs.pull_requests import show_pull_requests_dialog
 from dialogs.settings import show_settings_dialog
 
 # Reusable console panel
@@ -127,6 +128,10 @@ class MainWindow(Gtk.ApplicationWindow):
         mi_logs = Gtk.MenuItem(label="Git Logs")
         mi_logs.connect("activate", self.on_logs_clicked)
         menu.append(mi_logs)
+
+        mi_prs = Gtk.MenuItem(label="Pull Requests")
+        mi_prs.connect("activate", self.on_pull_requests_clicked)
+        menu.append(mi_prs)
 
         mi_about = Gtk.MenuItem(label="About")
         mi_about.connect("activate", self.on_about_clicked)
@@ -410,6 +415,9 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def on_about_clicked(self, _item) -> None:
         show_about_dialog(self, APP_TITLE, REPO_PATH, SETTINGS)
+
+    def on_pull_requests_clicked(self, _item) -> None:
+        show_pull_requests_dialog(self, run_git)
 
     def _show_repo_info_dialog(self) -> None:
         show_repo_info_dialog(self, run_git)
