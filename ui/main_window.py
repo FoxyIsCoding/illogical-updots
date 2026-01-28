@@ -97,7 +97,7 @@ class MainWindow(Gtk.ApplicationWindow):
         hb.set_show_close_button(True)
         hb.props.title = APP_TITLE
         self.header_bar = hb
-        self.header_bar.props.subtitle = REPO_PATH
+        self.header_bar.props.subtitle = self._get_current_repo_path()
         self.set_titlebar(hb)
 
         # Refresh button
@@ -241,7 +241,10 @@ class MainWindow(Gtk.ApplicationWindow):
         self.refresh_status()
         GLib.timeout_add_seconds(AUTO_REFRESH_SECONDS, self._auto_refresh)
 
-    # Icons
+    def _get_current_repo_path(self) -> str:
+        """Get the current repository path from SETTINGS, with fallback to REPO_PATH."""
+        return str(SETTINGS.get("repo_path", REPO_PATH) or REPO_PATH)
+
     def _init_icons(self) -> None:
         try:
             self.set_icon_name("illogical-updots")
@@ -412,9 +415,15 @@ class MainWindow(Gtk.ApplicationWindow):
         show_settings_dialog(
             self, SETTINGS, REPO_PATH, AUTO_REFRESH_SECONDS, _save_settings
         )
+        # Update subtitle with current repo path after settings dialog closes
+        if hasattr(self, "header_bar"):
+            try:
+                self.header_bar.props.subtitle = self._get_current_repo_path()
+            except Exception:
+                pass
 
     def on_about_clicked(self, _item) -> None:
-        show_about_dialog(self, APP_TITLE, REPO_PATH, SETTINGS)
+        show_about_dialog(self, APP_TITLE, self._get_current_repo_path(), SETTINGS)
 
     def on_pull_requests_clicked(self, _item) -> None:
         show_pull_requests_dialog(self, run_git)
@@ -442,7 +451,9 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _run_update_without_pull(self) -> None:
         # Run files-only installer without pulling (manual shortcut)
-        repo_path = self._status.repo_path if self._status else REPO_PATH
+        repo_path = (
+            self._status.repo_path if self._status else self._get_current_repo_path()
+        )
         setup_path = os.path.join(repo_path, "setup")
         self.console.ensure_open()
         self.console.append("\n=== INSTALLER START (FILES-ONLY SHORTCUT) ===\n")
@@ -544,7 +555,8 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def refresh_status(self) -> None:
         def refresh_work():
-            st = check_repo_status(REPO_PATH)
+            # Always use current repo_path from SETTINGS to pick up changes
+            st = check_repo_status(self._get_current_repo_path())
             GLib.idle_add(self._finish_refresh, st)
 
         if self._status is None:
@@ -1256,7 +1268,8 @@ class MainWindow(Gtk.ApplicationWindow):
 
     # External installer run (explicit)
     def run_install_external(self) -> None:
-        setup_path = os.path.join(REPO_PATH, "setup")
+        repo_path = self._get_current_repo_path()
+        setup_path = os.path.join(repo_path, "setup")
         if not (os.path.isfile(setup_path) and os.access(setup_path, os.X_OK)):
             self._show_message(Gtk.MessageType.INFO, "No executable './setup' found.")
             return
@@ -1264,7 +1277,7 @@ class MainWindow(Gtk.ApplicationWindow):
         console.present()
         console.run_process(
             ["./setup", "install"],
-            cwd=REPO_PATH,
+            cwd=repo_path,
             on_finished=self._run_post_script_if_configured,
         )
 

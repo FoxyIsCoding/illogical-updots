@@ -272,5 +272,7 @@ def show_settings_dialog(
                 window.header_bar.props.subtitle = REPO_PATH
             except Exception:
                 pass
+
+        # Refresh to pick up any setting changes including new repo path
         window.refresh_status()
     dialog.destroy()
