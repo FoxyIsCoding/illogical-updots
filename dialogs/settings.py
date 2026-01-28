@@ -186,8 +186,45 @@ def show_settings_dialog(
     cb_details_btn.set_active(bool(SETTINGS.get("show_details_button", True)))
     setting("Banner details button", cb_details_btn)
 
-    # POST ACTIONS (separator)
+    # PRE/POST ACTIONS (separator)
     separator()
+    entry_pre = Gtk.Entry()
+    entry_pre.set_text(str(SETTINGS.get("pre_script_path", "") or ""))
+    entry_pre.set_placeholder_text("/path/to/script.sh")
+    btn_pre = Gtk.Button.new_from_icon_name(
+        "folder-open-symbolic", Gtk.IconSize.BUTTON
+    )
+    pre_container = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+    pre_container.pack_start(entry_pre, True, True, 0)
+    pre_container.pack_start(btn_pre, False, False, 0)
+
+    def browse_pre(_b):
+        chooser = Gtk.FileChooserDialog(
+            title="Select pre-install script",
+            transient_for=window,
+            action=Gtk.FileChooserAction.OPEN,
+        )
+        chooser.add_buttons(
+            "Cancel", Gtk.ResponseType.CANCEL, "Select", Gtk.ResponseType.OK
+        )
+        try:
+            start_dir = os.path.dirname(
+                entry_pre.get_text().strip() or os.path.expanduser("~")
+            )
+            if os.path.isdir(start_dir):
+                chooser.set_current_folder(start_dir)
+        except Exception:
+            pass
+        resp = chooser.run()
+        if resp == Gtk.ResponseType.OK:
+            chosen = chooser.get_filename()
+            if chosen:
+                entry_pre.set_text(chosen)
+        chooser.destroy()
+
+    btn_pre.connect("clicked", browse_pre)
+    setting("Pre-install script", pre_container, "Script run before installer")
+
     entry_post = Gtk.Entry()
     entry_post.set_text(str(SETTINGS.get("post_script_path", "") or ""))
     entry_post.set_placeholder_text("/path/to/script.sh")
@@ -200,7 +237,7 @@ def show_settings_dialog(
 
     def browse_post(_b):
         chooser = Gtk.FileChooserDialog(
-            title="Select script",
+            title="Select post-install script",
             transient_for=window,
             action=Gtk.FileChooserAction.OPEN,
         )
@@ -260,6 +297,7 @@ def show_settings_dialog(
             pass
         SETTINGS["changes_lazy_load"] = cb_lazy.get_active()
         SETTINGS["show_details_button"] = cb_details_btn.get_active()
+        SETTINGS["pre_script_path"] = entry_pre.get_text().strip()
         SETTINGS["post_script_path"] = entry_post.get_text().strip()
         SETTINGS["keep_fish_config"] = cb_keep_fish.get_active()
         _save_settings(SETTINGS)

@@ -3,12 +3,11 @@
     <h3></h3>
 </div>
 
-<div align="center"> 
+<div align="center">
 
 ![](https://img.shields.io/github/last-commit/foxyiscoding/illogical-updots?&style=for-the-badge&color=8ad7eb&logo=git&logoColor=D9E0EE&labelColor=1E202B)
 ![](https://img.shields.io/github/stars/foxyiscoding/illogical-updots?style=for-the-badge&logo=andela&color=86dbd7&logoColor=D9E0EE&labelColor=1E202B)
 ![AUR Version](https://img.shields.io/aur/version/illogical-updots?style=for-the-badge&logo=archlinux&logoColor=D9E0EE&labelColor=1E202B&color=86dbd7&link=https%3A%2F%2Faur.archlinux.org%2Fpackages%2Fillogical-updots)
-
 
 </div>
 
@@ -24,6 +23,7 @@
      
   - **Updates**: Allows you to auto execute DotFile updates including pulling, stashing and installing all for you
   - **Commits changes**: Shows clean overview of the recent commit changes so you know what will change in update 
+  - **PreInstall script**: Optional script that will run before installation (prep, backups, environment tweaks)
   - **PostInstall script**: Optional  script that will run after installation ( can be anything for post tweaks that gets overwritten by the original install script)
     - **Quick installation**: The app should have all packages and modules installed already by your OS or the dots so it can be runned easily
    - **GTK Based UI** - The ui is made so it fits and feels right with the dotfiles.. It is also coded so its really fast and responsive while keeping the ui smooth and nice
@@ -39,30 +39,19 @@
 
   <summary>Installation</summary>
 
-  - We are on AUR so you can simply install it with yay or any aur helper.
-  - ``yay -S illogical-updots``
-  - Or, clone this repo and run `app.py`
-
-
-
+- We are on AUR so you can simply install it with yay or any aur helper.
+- `yay -S illogical-updots`
+- Or, clone this repo and run `app.py`
 
 <div align="center">
     <h2>• screenshots •</h2>
     <h3></h3>
 </div>
 
-
-
 ### illogical-updots<sup>Beta</sup>
 
-
-
-
-
-
-| Commits changes  | Build in console with options |
-|:---|:---------------|
-| <img width="1920" height="1080" alt="image" src="https://github.com/FoxyIsCoding/illogical-updots/blob/main/.github/assets/commits.png?raw=true" /> | <img width="1920" height="1080" alt="image" src="https://github.com/FoxyIsCoding/illogical-updots/blob/main/.github/assets/console.png?raw=true" /> |
-| Customization | Dynamic theme |
-| <img width="1920" height="1080" alt="image" src="https://github.com/FoxyIsCoding/illogical-updots/blob/main/.github/assets/settings.png?raw=true" /> | <img width="1920" height="1080" alt="image" src="https://github.com/FoxyIsCoding/illogical-updots/blob/main/.github/assets/app.png" /> |
-
+| Commits changes                                                                                                                                      | Build in console with options                                                                                                                       |
+| :--------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------- |
+| <img width="1920" height="1080" alt="image" src="https://github.com/FoxyIsCoding/illogical-updots/blob/main/.github/assets/commits.png?raw=true" />  | <img width="1920" height="1080" alt="image" src="https://github.com/FoxyIsCoding/illogical-updots/blob/main/.github/assets/console.png?raw=true" /> |
+| Customization                                                                                                                                        | Dynamic theme                                                                                                                                       |
+| <img width="1920" height="1080" alt="image" src="https://github.com/FoxyIsCoding/illogical-updots/blob/main/.github/assets/settings.png?raw=true" /> | <img width="1920" height="1080" alt="image" src="https://github.com/FoxyIsCoding/illogical-updots/blob/main/.github/assets/app.png" />              |

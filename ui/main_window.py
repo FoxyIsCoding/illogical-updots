@@ -687,6 +687,29 @@ class MainWindow(Gtk.ApplicationWindow):
                     text=True,
                 )
 
+            if not success:
+                GLib.idle_add(
+                    lambda: self._finish_update(False, pull.stdout, pull.stderr)
+                )
+                return
+
+            setup_path = os.path.join(repo_path, "setup")
+            if not (os.path.isfile(setup_path) and os.access(setup_path, os.X_OK)):
+                self.console.append(
+                    "No executable './setup' found. Skipping installer.\n"
+                )
+                GLib.idle_add(
+                    lambda: self._finish_update(False, pull.stdout, pull.stderr)
+                )
+                return
+
+            if not self._run_pre_script_if_configured():
+                self.console.append("[update] Pre-install script failed; aborting.\n")
+                GLib.idle_add(
+                    lambda: self._finish_update(False, pull.stdout, pull.stderr)
+                )
+                return
+
             # Decide install plan
             plan_cmds = self._plan_install_commands()
             mode_local = str(SETTINGS.get("installer_mode", "auto"))
@@ -764,63 +787,53 @@ class MainWindow(Gtk.ApplicationWindow):
                     plan_cmds = [["./setup", "install-files"]]
 
             # Embedded installer path
-            setup_path = os.path.join(repo_path, "setup")
-            if os.path.isfile(setup_path) and os.access(setup_path, os.X_OK):
-                self.console.append("Running installer...\n")
-                if not plan_cmds:
-                    plan_cmds = [["./setup", "install-files"]]
-                extra_args = plan_cmds[0][1:]
-                try:
-                    p = _spawn_setup_install(
-                        repo_path,
-                        lambda m: self.console.append(str(m)),
-                        extra_args=extra_args,
-                        capture_stdout=True,
-                        auto_input_seq=[],
-                        use_pty=bool(SETTINGS.get("use_pty", True)),
-                    )
-                    self.console.set_process(p)
-                    out = getattr(p, "stdout", None) if p else None
-                    if p and out is not None:
-                        for line in iter(out.readline, ""):
-                            if not line:
-                                break
-                            self.console.append(str(line))
-                        rc = p.wait()
-                        self.console.append(f"[installer exit {rc}]\n")
-                        self.console.set_process(None)
-                        if rc != 0 and "install-files" in extra_args:
-                            self.console.append(
-                                "[fallback] Retrying with 'install'...\n"
-                            )
-                            p2 = _spawn_setup_install(
-                                repo_path,
-                                lambda m: self.console.append(str(m)),
-                                extra_args=["install"],
-                                capture_stdout=True,
-                                auto_input_seq=[],
-                                use_pty=bool(SETTINGS.get("use_pty", True)),
-                            )
-                            self.console.set_process(p2)
-                            out2 = getattr(p2, "stdout", None) if p2 else None
-                            if p2 and out2 is not None:
-                                for line in iter(out2.readline, ""):
-                                    if not line:
-                                        break
-                                    self.console.append(str(line))
-                                rc2 = p2.wait()
-                                self.console.append(f"[installer exit {rc2}]\n")
-                            self.console.set_process(None)
-                    else:
-                        self.console.append(
-                            "[warn] Installer spawn returned no stdout.\n"
-                        )
-                except Exception as ex:
-                    self.console.append(f"[installer error] {ex}\n")
-            else:
-                self.console.append(
-                    "No executable './setup' found. Skipping installer.\n"
+            self.console.append("Running installer...\n")
+            if not plan_cmds:
+                plan_cmds = [["./setup", "install-files"]]
+            extra_args = plan_cmds[0][1:]
+            try:
+                p = _spawn_setup_install(
+                    repo_path,
+                    lambda m: self.console.append(str(m)),
+                    extra_args=extra_args,
+                    capture_stdout=True,
+                    auto_input_seq=[],
+                    use_pty=bool(SETTINGS.get("use_pty", True)),
                 )
+                self.console.set_process(p)
+                out = getattr(p, "stdout", None) if p else None
+                if p and out is not None:
+                    for line in iter(out.readline, ""):
+                        if not line:
+                            break
+                        self.console.append(str(line))
+                    rc = p.wait()
+                    self.console.append(f"[installer exit {rc}]\n")
+                    self.console.set_process(None)
+                    if rc != 0 and "install-files" in extra_args:
+                        self.console.append("[fallback] Retrying with 'install'...\n")
+                        p2 = _spawn_setup_install(
+                            repo_path,
+                            lambda m: self.console.append(str(m)),
+                            extra_args=["install"],
+                            capture_stdout=True,
+                            auto_input_seq=[],
+                            use_pty=bool(SETTINGS.get("use_pty", True)),
+                        )
+                        self.console.set_process(p2)
+                        out2 = getattr(p2, "stdout", None) if p2 else None
+                        if p2 and out2 is not None:
+                            for line in iter(out2.readline, ""):
+                                if not line:
+                                    break
+                                self.console.append(str(line))
+                            rc2 = p2.wait()
+                            self.console.append(f"[installer exit {rc2}]\n")
+                        self.console.set_process(None)
+                else:
+                    self.console.append("[warn] Installer spawn returned no stdout.\n")
+            except Exception as ex:
+                self.console.append(f"[installer error] {ex}\n")
 
             GLib.idle_add(
                 lambda: self._finish_update(success, pull.stdout, pull.stderr)
@@ -1205,33 +1218,48 @@ class MainWindow(Gtk.ApplicationWindow):
             )
         return ok
 
-    def _run_post_script_if_configured(self) -> None:
-        path = str(SETTINGS.get("post_script_path") or "").strip()
+    def _run_hook_script(self, setting_key: str, header: str, block: bool) -> bool:
+        path = str(SETTINGS.get(setting_key) or "").strip()
         if not path:
-            return
-        self.console.ensure_open()
-        self.console.append("\n=== POST-INSTALL SCRIPT ===\n")
+            return True
 
-        def work():
+        def _append(msg: str) -> None:
+            try:
+                if threading.current_thread() is threading.main_thread():
+                    self.console.append(msg)
+                else:
+                    GLib.idle_add(lambda m=msg: (self.console.append(m), False)[1])
+            except Exception:
+                pass
+
+        def _ensure_console_open() -> None:
+            try:
+                if threading.current_thread() is threading.main_thread():
+                    self.console.ensure_open()
+                else:
+                    GLib.idle_add(lambda: (self.console.ensure_open(), False)[1])
+            except Exception:
+                pass
+
+        _ensure_console_open()
+        _append(f"\n=== {header} ===\n")
+
+        def work() -> int:
             try:
                 if not os.path.exists(path):
-                    self.console.append(
-                        f"[post-script error] path does not exist: {path}\n"
-                    )
-                    return
+                    _append(f"[{setting_key} error] path does not exist: {path}\n")
+                    return 1
                 if os.path.isdir(path):
-                    self.console.append(
-                        f"[post-script error] path is a directory: {path}\n"
-                    )
-                    return
+                    _append(f"[{setting_key} error] path is a directory: {path}\n")
+                    return 1
                 if os.access(path, os.X_OK):
                     cmd_str = f"exec {shlex.quote(path)}"
                 else:
                     cmd_str = f"exec fish {shlex.quote(path)}"
-                    self.console.append(
-                        "[post-script] script not executable; running via fish interpreter\n"
+                    _append(
+                        f"[{setting_key}] script not executable; running via fish interpreter\n"
                     )
-                self.console.append(f"$ fish -lc {shlex.quote(cmd_str)}\n")
+                _append(f"$ fish -lc {shlex.quote(cmd_str)}\n")
                 p = subprocess.Popen(
                     ["fish", "-lc", cmd_str],
                     stdout=subprocess.PIPE,
@@ -1245,26 +1273,39 @@ class MainWindow(Gtk.ApplicationWindow):
                 for line in iter(p.stdout.readline, ""):
                     if not line:
                         break
-                    self.console.append(str(line))
+                    _append(str(line))
                 rc = p.wait()
-                self.console.append(f"[post-script exit {rc}]\n")
-                if bool(SETTINGS.get("send_notifications", True)):
+                _append(f"[{setting_key} exit {rc}]\n")
+                if not block and bool(SETTINGS.get("send_notifications", True)):
                     try:
                         app = self.get_application()
                         if isinstance(app, Gio.Application):
-                            n = Gio.Notification.new("Post script finished")
+                            n = Gio.Notification.new(f"{header.title()} finished")
                             n.set_body(
                                 "Exit code 0 (success)"
                                 if rc == 0
                                 else f"Exit code {rc} (errors)"
                             )
-                            app.send_notification("illogical-updots-post-script", n)
+                            app.send_notification(
+                                f"illogical-updots-{setting_key}", n
+                            )
                     except Exception:
                         pass
+                return rc
             except Exception as ex:
-                self.console.append(f"[post-script error] {ex}\n")
+                _append(f"[{setting_key} error] {ex}\n")
+                return 1
 
+        if block:
+            return work() == 0
         threading.Thread(target=work, daemon=True).start()
+        return True
+
+    def _run_pre_script_if_configured(self) -> bool:
+        return self._run_hook_script("pre_script_path", "PRE-INSTALL SCRIPT", True)
+
+    def _run_post_script_if_configured(self) -> None:
+        self._run_hook_script("post_script_path", "POST-INSTALL SCRIPT", False)
 
     # External installer run (explicit)
     def run_install_external(self) -> None:
@@ -1273,13 +1314,33 @@ class MainWindow(Gtk.ApplicationWindow):
         if not (os.path.isfile(setup_path) and os.access(setup_path, os.X_OK)):
             self._show_message(Gtk.MessageType.INFO, "No executable './setup' found.")
             return
-        console = SetupConsole(self, title="Installer (setup install)")
-        console.present()
-        console.run_process(
-            ["./setup", "install"],
-            cwd=repo_path,
-            on_finished=self._run_post_script_if_configured,
-        )
+
+        def gate_and_launch() -> None:
+            if not self._run_pre_script_if_configured():
+                GLib.idle_add(
+                    lambda: (
+                        self._show_message(
+                            Gtk.MessageType.ERROR,
+                            "Pre-install script failed; canceling install.",
+                        ),
+                        False,
+                    )[1]
+                )
+                return
+
+            def start_console() -> bool:
+                console = SetupConsole(self, title="Installer (setup install)")
+                console.present()
+                console.run_process(
+                    ["./setup", "install"],
+                    cwd=repo_path,
+                    on_finished=self._run_post_script_if_configured,
+                )
+                return False
+
+            GLib.idle_add(start_console)
+
+        threading.Thread(target=gate_and_launch, daemon=True).start()
 
 
 # Re-export commonly used symbols for convenience when importing this module

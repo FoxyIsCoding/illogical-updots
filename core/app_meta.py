@@ -38,6 +38,7 @@ DEFAULT_SETTINGS: Dict[str, object] = {
     "send_notifications": True,  # Desktop notifications on completion
     "log_max_lines": 5000,  # Trim log buffer (0 = unlimited)
     "changes_lazy_load": True,  # Lazy load commit list
+    "pre_script_path": "",  # Optional script executed before install
     "post_script_path": "",  # Optional script executed after install
     "show_details_button": True,  # Show small details link under banner
     "keep_fish_config": False,  # Backup & restore entire ~/.config/fish (config.fish, functions/, subfolders) before and after install

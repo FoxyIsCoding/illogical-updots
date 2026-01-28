@@ -59,7 +59,7 @@ def show_about_dialog(window, APP_TITLE, REPO_PATH, SETTINGS) -> None:
         " - Detects when your local branch is behind its upstream\n"
         " - Shows a changes view with avatars and animations\n"
         " - Provides an interactive embedded console with color output\n"
-        " - Runs your setup installer and an optional post-install script\n\n"
+        " - Runs your setup installer plus optional pre- and post-install scripts\n\n"
         "Tip: Configure the repository path and options in Settings."
     )
     sw.add(body)
