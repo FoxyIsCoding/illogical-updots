@@ -29,6 +29,45 @@ from typing import (
 )
 
 
+def _resolve_installer_basename(repo_path: str) -> str:
+    base = os.path.basename(os.path.abspath(repo_path)) if repo_path else ""
+    return "install-ii-vynx.sh" if base == "ii-vynx" else "setup"
+
+
+def _installer_command_variants(
+    repo_path: str, extra_args: List[str]
+) -> List[List[str]]:
+    script = f"./{_resolve_installer_basename(repo_path)}"
+    return [
+        [script] + extra_args,
+        ["fish", script] + extra_args,
+        ["sh", script] + extra_args,
+    ]
+
+
+def resolve_installer_basename(repo_path: str) -> str:
+    """
+    Public helper to resolve the installer script filename for a repo.
+    """
+    return _resolve_installer_basename(repo_path)
+
+
+def installer_entry(repo_path: str) -> str:
+    """
+    Returns the installer entrypoint with a leading './' for execution.
+    """
+    return f"./{resolve_installer_basename(repo_path)}"
+
+
+def installer_exists(repo_path: str) -> bool:
+    """
+    Check that the resolved installer exists and is executable.
+    """
+    script = resolve_installer_basename(repo_path)
+    path = os.path.join(repo_path, script)
+    return os.path.isfile(path) and os.access(path, os.X_OK)
+
+
 # -------------------------------------------------------------------
 # Environment helpers
 # -------------------------------------------------------------------
@@ -134,9 +173,9 @@ def spawn_setup_install(
     Spawn the setup installer with progressive fallbacks and optional PTY.
 
     Strategy:
-        1. Try './setup' directly.
-        2. Fallback to 'fish ./setup'.
-        3. Fallback to 'sh ./setup'.
+        1. Try the resolved installer entry (e.g., './setup' or './install-ii-vynx.sh') directly.
+        2. Fallback to 'fish <entry>'.
+        3. Fallback to 'sh <entry>'.
 
     PTY usage:
         - When enabled, opens a pseudo terminal to preserve color + interactive prompts.
@@ -149,7 +188,7 @@ def spawn_setup_install(
     Args:
         repo_path: Path to repo containing setup script.
         logger: Callable accepting message lines.
-        extra_args: Additional arguments after './setup'.
+        extra_args: Additional arguments after the resolved installer entry.
         capture_stdout: Whether to capture/stream stdout/stderr (when not using PTY).
         auto_input_seq: Optional sequence of string inputs to feed.
         use_pty: Attempt PTY; fallback to pipe on failure.
@@ -164,11 +203,8 @@ def spawn_setup_install(
     import pty  # Imported locally to avoid hard dependency if not used
 
     extra_args = extra_args or []
-    base_cmds: List[List[str]] = [
-        ["./setup"] + extra_args,
-        ["fish", "./setup"] + extra_args,
-        ["sh", "./setup"] + extra_args,
-    ]
+    base_cmds: List[List[str]] = _installer_command_variants(repo_path, extra_args)
+    skip_auto_input = _resolve_installer_basename(repo_path) == "install-ii-vynx.sh"
 
     def _env():
         return build_color_env()
@@ -251,7 +287,7 @@ def spawn_setup_install(
                 logger(f"[spawn] {' '.join(cmd)}\n")
 
             # Auto-input feeder
-            if auto_input_seq:
+            if auto_input_seq and not skip_auto_input:
                 # Feed specified items then yesforall
                 def _feed():
                     import time as _t
@@ -295,7 +331,7 @@ def spawn_setup_install(
                         logger(f"[auto-input-error] {_ex}\n")
 
                 threading.Thread(target=_feed, daemon=True).start()
-            else:
+            elif not auto_input_seq and not skip_auto_input:
                 # Always send baseline 'yesforall' to allow unattended flows
                 def _feed_yesforall():
                     import time as _t
@@ -349,7 +385,7 @@ def launch_install_external(
         extra_args: Optional extra args after 'install' (e.g., ["--flag"]).
     """
     args = ["install"] + list(extra_args or [])
-    cmd = ["./setup"] + args
+    cmd = [installer_entry(repo_path)] + args
 
     terminals: List[tuple[str, List[str]]] = [
         ("kitty", ["kitty", "-e"]),
@@ -405,4 +441,7 @@ __all__ = [
     "stream_process_lines",
     "spawn_setup_install",
     "launch_install_external",
+    "resolve_installer_basename",
+    "installer_entry",
+    "installer_exists",
 ]

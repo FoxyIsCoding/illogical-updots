@@ -61,6 +61,9 @@ from ui.console_panel import ConsolePanel
 # Process helpers
 from utils.process import (
     spawn_setup_install as _spawn_setup_install,
+    installer_entry as _installer_entry,
+    installer_exists as _installer_exists,
+    resolve_installer_basename as _resolve_installer_basename,
 )
 
 # Optional external console widget
@@ -454,7 +457,12 @@ class MainWindow(Gtk.ApplicationWindow):
         repo_path = (
             self._status.repo_path if self._status else self._get_current_repo_path()
         )
-        setup_path = os.path.join(repo_path, "setup")
+        installer_cmd = _installer_entry(repo_path)
+        display_cmd = (
+            installer_cmd
+            if installer_cmd.endswith("install-ii-vynx.sh")
+            else f"{installer_cmd} install-files"
+        )
         self.console.ensure_open()
         self.console.append("\n=== INSTALLER START (FILES-ONLY SHORTCUT) ===\n")
 
@@ -467,7 +475,7 @@ class MainWindow(Gtk.ApplicationWindow):
             text="Run files-only installer?",
         )
         dlg.format_secondary_text(
-            "This will execute './setup install-files' without pulling upstream.\nProceed?"
+            f"This will execute '{display_cmd}' without pulling upstream.\nProceed?"
         )
         dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
         dlg.add_button("Install", Gtk.ResponseType.YES)
@@ -475,6 +483,13 @@ class MainWindow(Gtk.ApplicationWindow):
         dlg.destroy()
         if r != Gtk.ResponseType.YES:
             self.console.append("[install-files] User canceled.\n")
+            return
+
+        if not _installer_exists(repo_path):
+            self._show_message(
+                Gtk.MessageType.INFO,
+                f"No executable '{_resolve_installer_basename(repo_path)}' found.",
+            )
             return
 
         # Optional backup confirmation
@@ -501,16 +516,19 @@ class MainWindow(Gtk.ApplicationWindow):
                 except Exception as ex:
                     self.console.append(f"[keep-fish-config backup error] {ex}\n")
 
-        if not (os.path.isfile(setup_path) and os.access(setup_path, os.X_OK)):
-            self._show_message(Gtk.MessageType.INFO, "No executable './setup' found.")
-            return
+
 
         def work():
+            extra_args = (
+                []
+                if installer_cmd.endswith("install-ii-vynx.sh")
+                else ["install-files"]
+            )
             try:
                 p = _spawn_setup_install(
                     repo_path,
                     lambda m: self.console.append(str(m)),
-                    extra_args=["install-files"],
+                    extra_args=extra_args,
                     capture_stdout=True,
                     auto_input_seq=[],
                     use_pty=bool(SETTINGS.get("use_pty", True)),
@@ -693,10 +711,9 @@ class MainWindow(Gtk.ApplicationWindow):
                 )
                 return
 
-            setup_path = os.path.join(repo_path, "setup")
-            if not (os.path.isfile(setup_path) and os.access(setup_path, os.X_OK)):
+            if not _installer_exists(repo_path):
                 self.console.append(
-                    "No executable './setup' found. Skipping installer.\n"
+                    f"No executable '{_resolve_installer_basename(repo_path)}' found. Skipping installer.\n"
                 )
                 GLib.idle_add(
                     lambda: self._finish_update(False, pull.stdout, pull.stderr)
@@ -711,7 +728,7 @@ class MainWindow(Gtk.ApplicationWindow):
                 return
 
             # Decide install plan
-            plan_cmds = self._plan_install_commands()
+            plan_cmds = self._plan_install_commands(repo_path)
             mode_local = str(SETTINGS.get("installer_mode", "auto"))
             full = False
             if mode_local == "auto":
@@ -743,13 +760,19 @@ class MainWindow(Gtk.ApplicationWindow):
 
                         def _kitty_work():
                             try:
+                                installer_cmd = _installer_entry(repo_path)
+                                cmd_str = (
+                                    f"cd {shlex.quote(repo_path)} && {installer_cmd}"
+                                    if installer_cmd.endswith("install-ii-vynx.sh")
+                                    else f"cd {shlex.quote(repo_path)} && {installer_cmd} install"
+                                )
                                 rc = subprocess.Popen(
                                     [
                                         "kitty",
                                         "-e",
                                         "fish",
                                         "-lc",
-                                        f"cd {shlex.quote(repo_path)} && ./setup install",
+                                        cmd_str,
                                     ]
                                 ).wait()
                             except Exception as ex:
@@ -782,14 +805,27 @@ class MainWindow(Gtk.ApplicationWindow):
                         threading.Thread(target=_kitty_work, daemon=True).start()
                         return
                     else:
-                        plan_cmds = [["./setup", "install"]]
+                        entry = _installer_entry(repo_path)
+                        plan_cmds = (
+                            [[entry]]
+                            if entry.endswith("install-ii-vynx.sh")
+                            else [[entry, "install"]]
+                        )
                 else:
-                    plan_cmds = [["./setup", "install-files"]]
+                    entry = _installer_entry(repo_path)
+                    plan_cmds = (
+                        [[entry]]
+                        if entry.endswith("install-ii-vynx.sh")
+                        else [[entry, "install-files"]]
+                    )
 
             # Embedded installer path
             self.console.append("Running installer...\n")
+            entry = _installer_entry(repo_path)
             if not plan_cmds:
-                plan_cmds = [["./setup", "install-files"]]
+                plan_cmds = (
+                    [[entry]] if entry.endswith("install-ii-vynx.sh") else [[entry, "install-files"]]
+                )
             extra_args = plan_cmds[0][1:]
             try:
                 p = _spawn_setup_install(
@@ -1016,16 +1052,20 @@ class MainWindow(Gtk.ApplicationWindow):
             # Best-effort; if it fails we just fall back to merge logic
             pass
 
-    def _plan_install_commands(self) -> list[list[str]]:
+    def _plan_install_commands(self, repo_path: str) -> list[list[str]]:
+        installer = _installer_entry(repo_path)
+        if installer.endswith("install-ii-vynx.sh"):
+            self.console.append("Installer mode: single-script (no subcommands).\n")
+            return [[installer]]
         mode = str(SETTINGS.get("installer_mode", "auto"))
         if mode == "full":
             self.console.append("Installer mode: full install.\n")
-            return [["./setup", "install"]]
+            return [[installer, "install"]]
         if mode == "auto":
             self.console.append("Installer mode: auto (pending decision).\n")
-            return [["./setup", "install-files"]]
+            return [[installer, "install-files"]]
         self.console.append("Installer mode: files-only.\n")
-        return [["./setup", "install-files"]]
+        return [[installer, "install-files"]]
 
     def _ensure_tray_icon(self) -> None:
         if getattr(self, "_tray_icon", None):
@@ -1084,6 +1124,17 @@ class MainWindow(Gtk.ApplicationWindow):
         if not changed:
             return False
 
+        installer_cmd = _installer_entry(repo_path)
+        full_label = (
+            f"{installer_cmd} install"
+            if not installer_cmd.endswith("install-ii-vynx.sh")
+            else installer_cmd
+        )
+        files_label = (
+            f"{installer_cmd} install-files"
+            if not installer_cmd.endswith("install-ii-vynx.sh")
+            else installer_cmd
+        )
         dlg = Gtk.MessageDialog(
             transient_for=self,
             flags=0,
@@ -1092,7 +1143,7 @@ class MainWindow(Gtk.ApplicationWindow):
             text="Package-related changes detected",
         )
         dlg.format_secondary_text(
-            "Incoming changes found in sdata/dist-arch.\nRun FULL installation?\n\nYes = full (./setup install)\nNo = minimal (./setup install-files)"
+            f"Incoming changes found in sdata/dist-arch.\nRun FULL installation?\n\nYes = full ({full_label})\nNo = minimal ({files_label})"
         )
         dlg.add_button("No (files-only)", Gtk.ResponseType.NO)
         dlg.add_button("Yes (full)", Gtk.ResponseType.YES)
@@ -1310,9 +1361,11 @@ class MainWindow(Gtk.ApplicationWindow):
     # External installer run (explicit)
     def run_install_external(self) -> None:
         repo_path = self._get_current_repo_path()
-        setup_path = os.path.join(repo_path, "setup")
-        if not (os.path.isfile(setup_path) and os.access(setup_path, os.X_OK)):
-            self._show_message(Gtk.MessageType.INFO, "No executable './setup' found.")
+        if not _installer_exists(repo_path):
+            self._show_message(
+                Gtk.MessageType.INFO,
+                f"No executable '{_resolve_installer_basename(repo_path)}' found.",
+            )
             return
 
         def gate_and_launch() -> None:
@@ -1329,10 +1382,25 @@ class MainWindow(Gtk.ApplicationWindow):
                 return
 
             def start_console() -> bool:
-                console = SetupConsole(self, title="Installer (setup install)")
+                installer_cmd = _installer_entry(repo_path)
+                base_name = _resolve_installer_basename(repo_path)
+                install_label = (
+                    f"{base_name} install"
+                    if not base_name.endswith("install-ii-vynx.sh")
+                    else base_name
+                )
+                console = SetupConsole(
+                    self,
+                    title=f"Installer ({install_label})",
+                )
+                args = (
+                    [installer_cmd]
+                    if installer_cmd.endswith("install-ii-vynx.sh")
+                    else [installer_cmd, "install"]
+                )
                 console.present()
                 console.run_process(
-                    ["./setup", "install"],
+                    args,
                     cwd=repo_path,
                     on_finished=self._run_post_script_if_configured,
                 )

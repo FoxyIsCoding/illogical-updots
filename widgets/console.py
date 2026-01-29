@@ -11,6 +11,7 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gtk, Gdk, GLib
 
 from helpers.ansi import insert_ansi_formatted
+from utils.process import installer_entry as _installer_entry
 
 
 class SetupConsole(Gtk.Window):
@@ -144,10 +145,12 @@ class SetupConsole(Gtk.Window):
         self._finished_callback = on_finished
         self._append(f"$ {' '.join(shlex.quote(a) for a in argv)}\n")
         try:
-            # If argv starts with ./setup attempt robust spawn with fallbacks
-            if argv and argv[0] == "./setup":
+            repo_root = cwd or os.getcwd()
+            installer_cmd = _installer_entry(repo_root)
+            # If argv starts with the resolved installer entry attempt robust spawn with fallbacks
+            if argv and argv[0] in ("./setup", installer_cmd):
                 self._proc = _spawn_setup_install(
-                    cwd,
+                    repo_root,
                     lambda msg: self._append(msg),
                     extra_args=argv[1:],
                     capture_stdout=True,
@@ -346,7 +349,7 @@ def _spawn_setup_install(
     use_pty: bool = True,
 ):
     """
-    Spawn ./setup with ANSI color + interactive support.
+    Spawn the resolved installer entry (./setup or ./install-ii-vynx.sh) with ANSI color + interactive support.
 
     If use_pty is True we allocate a pseudo-terminal so tools think they are in a real
     terminal (preserves colors, interactive prompts). Falls back to direct execution
@@ -361,10 +364,13 @@ def _spawn_setup_install(
     import pty
 
     extra_args = extra_args or []
+    entry = _installer_entry(repo_path)
+    skip_auto_input = entry.endswith("install-ii-vynx.sh")
     base_cmds = [
-        ["./setup"] + extra_args,
-        ["bash", "./setup"] + extra_args,
-        ["sh", "./setup"] + extra_args,
+        [entry] + extra_args,
+        ["fish", entry] + extra_args,
+        ["bash", entry] + extra_args,
+        ["sh", entry] + extra_args,
     ]
 
     def _env():
@@ -451,7 +457,7 @@ def _spawn_setup_install(
                 logger(f"[spawn] {' '.join(cmd)}\n")
 
             # Auto input sequence (sent after slight delay to allow prompt rendering)
-            if auto_input_seq:
+            if auto_input_seq and not skip_auto_input:
 
                 def _feed():
                     import time as _t
@@ -495,7 +501,7 @@ def _spawn_setup_install(
                         logger(f"[auto-input-error] {_ex}\n")
 
                 threading.Thread(target=_feed, daemon=True).start()
-            else:
+            elif not auto_input_seq and not skip_auto_input:
                 # Even without an explicit auto_input_seq, send a trailing 'yesforall'
                 def _feed_yesforall():
                     import os
