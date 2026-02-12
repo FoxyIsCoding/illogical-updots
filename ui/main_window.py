@@ -460,7 +460,7 @@ class MainWindow(Gtk.ApplicationWindow):
         installer_cmd = _installer_entry(repo_path)
         display_cmd = (
             installer_cmd
-            if installer_cmd.endswith("install-ii-vynx.sh")
+            if installer_cmd.endswith("setup-ii-vynx.sh")
             else f"{installer_cmd} install-files"
         )
         self.console.ensure_open()
@@ -521,7 +521,7 @@ class MainWindow(Gtk.ApplicationWindow):
         def work():
             extra_args = (
                 []
-                if installer_cmd.endswith("install-ii-vynx.sh")
+                if installer_cmd.endswith("setup-ii-vynx.sh")
                 else ["install-files"]
             )
             try:
@@ -763,7 +763,7 @@ class MainWindow(Gtk.ApplicationWindow):
                                 installer_cmd = _installer_entry(repo_path)
                                 cmd_str = (
                                     f"cd {shlex.quote(repo_path)} && {installer_cmd}"
-                                    if installer_cmd.endswith("install-ii-vynx.sh")
+                                    if installer_cmd.endswith("setup-ii-vynx.sh")
                                     else f"cd {shlex.quote(repo_path)} && {installer_cmd} install"
                                 )
                                 rc = subprocess.Popen(
@@ -808,14 +808,14 @@ class MainWindow(Gtk.ApplicationWindow):
                         entry = _installer_entry(repo_path)
                         plan_cmds = (
                             [[entry]]
-                            if entry.endswith("install-ii-vynx.sh")
+                            if entry.endswith("setup-ii-vynx.sh")
                             else [[entry, "install"]]
                         )
                 else:
                     entry = _installer_entry(repo_path)
                     plan_cmds = (
                         [[entry]]
-                        if entry.endswith("install-ii-vynx.sh")
+                        if entry.endswith("setup-ii-vynx.sh")
                         else [[entry, "install-files"]]
                     )
 
@@ -824,7 +824,7 @@ class MainWindow(Gtk.ApplicationWindow):
             entry = _installer_entry(repo_path)
             if not plan_cmds:
                 plan_cmds = (
-                    [[entry]] if entry.endswith("install-ii-vynx.sh") else [[entry, "install-files"]]
+                    [[entry]] if entry.endswith("setup-ii-vynx.sh") else [[entry, "install-files"]]
                 )
             extra_args = plan_cmds[0][1:]
             try:
@@ -1054,7 +1054,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _plan_install_commands(self, repo_path: str) -> list[list[str]]:
         installer = _installer_entry(repo_path)
-        if installer.endswith("install-ii-vynx.sh"):
+        if installer.endswith("setup-ii-vynx.sh"):
             self.console.append("Installer mode: single-script (no subcommands).\n")
             return [[installer]]
         mode = str(SETTINGS.get("installer_mode", "auto"))
@@ -1127,12 +1127,12 @@ class MainWindow(Gtk.ApplicationWindow):
         installer_cmd = _installer_entry(repo_path)
         full_label = (
             f"{installer_cmd} install"
-            if not installer_cmd.endswith("install-ii-vynx.sh")
+            if not installer_cmd.endswith("setup-ii-vynx.sh")
             else installer_cmd
         )
         files_label = (
             f"{installer_cmd} install-files"
-            if not installer_cmd.endswith("install-ii-vynx.sh")
+            if not installer_cmd.endswith("setup-ii-vynx.sh")
             else installer_cmd
         )
         dlg = Gtk.MessageDialog(
@@ -1386,7 +1386,7 @@ class MainWindow(Gtk.ApplicationWindow):
                 base_name = _resolve_installer_basename(repo_path)
                 install_label = (
                     f"{base_name} install"
-                    if not base_name.endswith("install-ii-vynx.sh")
+                    if not base_name.endswith("setup-ii-vynx.sh")
                     else base_name
                 )
                 console = SetupConsole(
@@ -1395,7 +1395,7 @@ class MainWindow(Gtk.ApplicationWindow):
                 )
                 args = (
                     [installer_cmd]
-                    if installer_cmd.endswith("install-ii-vynx.sh")
+                    if installer_cmd.endswith("setup-ii-vynx.sh")
                     else [installer_cmd, "install"]
                 )
                 console.present()

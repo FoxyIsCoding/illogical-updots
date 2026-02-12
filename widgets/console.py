@@ -349,7 +349,7 @@ def _spawn_setup_install(
     use_pty: bool = True,
 ):
     """
-    Spawn the resolved installer entry (./setup or ./install-ii-vynx.sh) with ANSI color + interactive support.
+    Spawn the resolved installer entry (./setup or ./setup-ii-vynx.sh) with ANSI color + interactive support.
 
     If use_pty is True we allocate a pseudo-terminal so tools think they are in a real
     terminal (preserves colors, interactive prompts). Falls back to direct execution
@@ -365,7 +365,7 @@ def _spawn_setup_install(
 
     extra_args = extra_args or []
     entry = _installer_entry(repo_path)
-    skip_auto_input = entry.endswith("install-ii-vynx.sh")
+    skip_auto_input = entry.endswith("setup-ii-vynx.sh")
     base_cmds = [
         [entry] + extra_args,
         ["fish", entry] + extra_args,

@@ -31,7 +31,7 @@ from typing import (
 
 def _resolve_installer_basename(repo_path: str) -> str:
     base = os.path.basename(os.path.abspath(repo_path)) if repo_path else ""
-    return "install-ii-vynx.sh" if base == "ii-vynx" else "setup"
+    return "setup-ii-vynx.sh" if base == "ii-vynx" else "setup"
 
 
 def _installer_command_variants(
@@ -173,7 +173,7 @@ def spawn_setup_install(
     Spawn the setup installer with progressive fallbacks and optional PTY.
 
     Strategy:
-        1. Try the resolved installer entry (e.g., './setup' or './install-ii-vynx.sh') directly.
+        1. Try the resolved installer entry (e.g., './setup' or './setup-ii-vynx.sh') directly.
         2. Fallback to 'fish <entry>'.
         3. Fallback to 'sh <entry>'.
 
@@ -204,7 +204,7 @@ def spawn_setup_install(
 
     extra_args = extra_args or []
     base_cmds: List[List[str]] = _installer_command_variants(repo_path, extra_args)
-    skip_auto_input = _resolve_installer_basename(repo_path) == "install-ii-vynx.sh"
+    skip_auto_input = _resolve_installer_basename(repo_path) == "setup-ii-vynx.sh"
 
     def _env():
         return build_color_env()
