@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import logging
 import os
 import sys
@@ -24,25 +26,34 @@ from main_window import (
     _save_settings,
 )
 
+
 class App(Gtk.Application):
     def __init__(self) -> None:
         super().__init__(application_id=APP_ID)
         GLib.set_prgname("illogical-updots")
         GLib.set_application_name("Illogical Updots")
         try:
+            LOG.debug("Setting default icon name 'illogical-updots'")
             Gtk.Window.set_default_icon_name("illogical-updots")
-        except Exception:
-            pass
+            LOG.debug("Icon name set via theme lookup")
+        except Exception as e:
+            LOG.debug(f"Failed to set icon name via theme lookup: {e}")
 
         def _try_set_icon_file(p: str) -> bool:
             if p and os.path.isfile(p):
+                LOG.debug(f"Trying icon file: {p}")
                 try:
                     Gtk.Window.set_default_icon_from_file(p)
+                    LOG.debug(f"Set default icon from file: {p}")
                     return True
-                except Exception:
+                except Exception as e:
+                    LOG.debug(f"Failed to set icon from file: {p}: {e}")
                     return False
+            else:
+                LOG.debug(f"Icon file not found: {p}")
             return False
 
+        # some common locations to look for the app icon
         base_dir = os.path.dirname(os.path.abspath(__file__))
         candidates = [
             "/usr/share/icons/hicolor/256x256/apps/illogical-updots.png",
@@ -51,34 +62,51 @@ class App(Gtk.Application):
             os.path.join(base_dir, ".github", "assets", "logo.png"),
             os.path.join(base_dir, "assets", "logo.png"),
         ]
+        LOG.debug(f"Icon candidates: {candidates}")
         if not any(_try_set_icon_file(p) for p in candidates):
+            # Fallback: cached download to avoid repeated network hits
             cache_dir = os.path.join(os.path.expanduser("~/.cache"), "illogical-updots")
             cache_path = os.path.join(cache_dir, "icon.png")
+            LOG.debug(f"Checking cached icon at {cache_path}")
             if not _try_set_icon_file(cache_path):
+
                 def _download_icon():
                     try:
                         os.makedirs(cache_dir, exist_ok=True)
                         url = "https://github.com/FoxyIsCoding/illogical-updots/blob/main/.github/assets/logo.png?raw=true"
+                        LOG.debug(f"Downloading icon from {url} to {cache_path}")
                         urllib.request.urlretrieve(url, cache_path)
+                        LOG.debug("Icon downloaded; scheduling set from cache")
                         GLib.idle_add(lambda: _try_set_icon_file(cache_path))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        LOG.debug(f"Icon download failed: {e}")
+
                 try:
+                    LOG.debug("Starting background thread to download icon")
                     threading.Thread(target=_download_icon, daemon=True).start()
-                except Exception:
-                    pass
+                except Exception as e:
+                    LOG.debug(f"Failed to start icon download thread: {e}")
         _icon_file = ".github/assets/logo.png"
         if os.path.isfile(_icon_file):
             try:
+                LOG.debug(f"Using local repo icon: {_icon_file}")
                 Gtk.Window.set_default_icon_from_file(_icon_file)
-            except Exception:
-                pass
+            except Exception as e:
+                LOG.debug(f"Failed to set local repo icon: {e}")
 
-    def do_activate(self) -> None:
+    def do_activate(self) -> None:  # type: ignore[override]
         global REPO_PATH
+        # first run check: ensure the onboarding has been shown or repo path is set
         if not SETTINGS.get("onboarding_shown") or not REPO_PATH or not os.path.isdir(REPO_PATH):
             from dialogs.onboarding import show_onboarding_dialog
+            # If onboarding was already shown but repo path is missing, we still want to show it
+            # or provide the fallback.
             if not show_onboarding_dialog(None, SETTINGS):
+                # If they cancel onboarding, they might still want to pick a folder manually
+                # Or we can just exit. Let's provide a fallback to manual selection
+                # if they didn't finish onboarding but want to continue.
+                
+                # if not prompt user to select it
                 alert = Gtk.MessageDialog(
                     transient_for=None,
                     flags=0,
@@ -96,6 +124,7 @@ class App(Gtk.Application):
                 alert.destroy()
                 if resp_alert != Gtk.ResponseType.OK:
                     return
+                # open file picker
                 chooser = Gtk.FileChooserDialog(
                     title="Select repository directory",
                     transient_for=None,
@@ -119,8 +148,10 @@ class App(Gtk.Application):
                         REPO_PATH = chosen
                 chooser.destroy()
             else:
+                # Onboarding success
                 REPO_PATH = str(SETTINGS.get("repo_path", ""))
 
+            # if canceled or invalid, just exit man
             if not REPO_PATH or not os.path.isdir(REPO_PATH):
                 return
 
@@ -128,14 +159,16 @@ class App(Gtk.Application):
             MainWindow(self)
         win = self.props.active_window
         if win:
+            # some random ass thing that helps the icon to be displayed correctly
             try:
                 win.set_icon_name("illogical-updots")
             except Exception:
                 pass
             win.present()
 
-    def do_shutdown(self) -> None:
+    def do_shutdown(self) -> None:  # type: ignore[override]
         Gtk.Application.do_shutdown(self)
+
 
 def main(argv: Optional[list[str]] = None) -> int:
     import argparse
@@ -158,6 +191,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     app = App()
     return app.run(argv if argv is not None else sys.argv)
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

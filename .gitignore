@@ -1,1 +1,4 @@
 __pycache__/
+/illogical-updots-rust/target/
+illogical-updots-rust/target/debug/
+illogical-updots-rust/target/release/

@@ -42,6 +42,15 @@ DEFAULT_SETTINGS: Dict[str, object] = {
     "post_script_path": "",  # Optional script executed after install
     "show_details_button": True,  # Show small details link under banner
     "keep_fish_config": False,  # Backup & restore entire ~/.config/fish (config.fish, functions/, subfolders) before and after install
+    "onboarding_shown": False,  # Whether the first-time onboarding has been completed
+    "git_fetch_all": True,      # Fetch all remotes
+    "git_prune": True,          # Prune remote tracking branches
+    "window_opacity": 1.0,      # Main window opacity
+    "console_font_size": 12,    # Font size for console
+    "confirm_on_exit": False,   # Prompt before closing
+    "terminal_emulator": "",    # Override terminal emulator
+    "auto_hide_console": True,  # Hide console after successful update
+    "verbose_git": False,       # Show full git output in console
 }
 
 
@@ -115,11 +124,7 @@ def detect_initial_repo_path(settings: MutableMapping[str, object]) -> str:
 
     Precedence:
     1) Use 'repo_path' from provided settings if it exists and is a directory.
-    2) Fallback to '~/.cache/dots-hyprland' if present.
-    3) Otherwise, return empty string.
-
-    Side effects:
-    - If a fallback is used, update the provided settings and persist immediately.
+    2) Otherwise, return empty string (triggers onboarding in app.py).
 
     Args:
         settings: Mutable mapping of current settings.
@@ -130,12 +135,6 @@ def detect_initial_repo_path(settings: MutableMapping[str, object]) -> str:
     p = str(settings.get("repo_path") or "").strip()
     if p and os.path.isdir(p):
         return p
-
-    fallback = os.path.expanduser("~/.cache/dots-hyprland")
-    if os.path.isdir(fallback):
-        settings["repo_path"] = fallback
-        save_settings(settings)
-        return fallback
 
     return ""
 
